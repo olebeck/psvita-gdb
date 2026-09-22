@@ -1,0 +1,4 @@
+[toolchain]
+channel = "nightly"
+targets = ["armv7-sony-vita-newlibeabihf"]
+profile = "minimal"

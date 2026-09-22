@@ -1,0 +1,52 @@
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install VitaSDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config wget
+          git clone https://github.com/vitasdk/vdpm
+          cd vdpm
+          ./bootstrap-vitasdk.sh
+          echo "VITASDK=/usr/local/vitasdk" >> "$GITHUB_ENV"
+          echo "/usr/local/vitasdk/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Build release
+        run: just release
+
+      - name: Copy skprx
+        run: |
+          mkdir -p dist
+          cp target/armv7-sony-vita-newlibeabihf/release/vita-gdb.skprx dist/
+
+      - name: Upload files
+        uses: actions/upload-artifact@v4
+        with:
+          name: psvita-gdb
+          path: dist/
+
+      - name: Create prerelease
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          prerelease: true
+          files: dist/*

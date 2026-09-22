@@ -1,0 +1,4 @@
+vita-gdb:
+  process_image: false
+  main:
+    start: module_start

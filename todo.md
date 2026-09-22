@@ -1,0 +1,12 @@
+- test stepping, arm-next-pc is *probably correct*
+- change some println to debugln
+- figure out how to actually enable cp14
+- module load events
+- neon registers
+- fix remaining warnings
+- 3.65 support (doneish needs testing)
+- network events instead of trying to listen once a second lol
+- disable appmgr shell watch dog when debugging shell
+- add monitor commands for info
+- fix scheduler lock
+- handle vfp exceptions

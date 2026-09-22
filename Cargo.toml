@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "arm-next-pc",
+    "vita-gdb"
+]
+resolver = "2"
+
+[profile.dev]
+panic = "abort"
+opt-level = 's'
+
+[profile.release]
+panic = "abort"
+opt-level = 's'
+lto = true
+codegen-units = 1
+debug = true
+
+[profile.test]
+opt-level = 's'
