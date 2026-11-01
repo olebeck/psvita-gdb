@@ -15,10 +15,6 @@ pub struct EventFlagRef {
 }
 
 impl EventFlagRef {
-    pub fn new(evfid: SceUID) -> Self {
-        Self { evfid }
-    }
-
     pub fn set(&self, bits: u32) -> Result<(), SceError> {
         //println!("ksceKernelSetEventFlag({}, {bits:b})", self.evfid);
         sce_call!(ksceKernelSetEventFlag(self.evfid, bits))

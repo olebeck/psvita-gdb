@@ -1,8 +1,5 @@
 use core::{
-    ffi::{CStr, c_void},
-    fmt::{Display, Write},
-    mem::zeroed,
-    ptr::null_mut,
+    ffi::{CStr, c_void}, fmt::{Debug, Display, Write}, mem::zeroed, ptr::null_mut,
 };
 
 use vitasdk_sys::{
@@ -26,7 +23,7 @@ use crate::kernel::{
 };
 use crate::println;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SceError {
     pub code: i32,
     pub func: &'static str,
@@ -39,6 +36,12 @@ impl SceError {
 }
 
 impl Display for SceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} failed: {:#x}", self.func, self.code)
+    }
+}
+
+impl Debug for SceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{} failed: {:#x}", self.func, self.code)
     }

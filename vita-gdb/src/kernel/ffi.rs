@@ -86,6 +86,14 @@ macro_rules! libstub {
     };
 }
 
+#[repr(C)]
+pub struct FuncVerStub {
+    pub stub: *mut *const (),
+    pub func_363: *const (),
+}
+
+unsafe impl Sync for FuncVerStub {}
+
 macro_rules! libstub_ver {
     (
         $lib:ident,
@@ -105,15 +113,15 @@ macro_rules! libstub_ver {
             paste::paste! {
                 #[used]
                 #[unsafe(link_section = "vita_patch363")]
-                static [<$name:upper _PATCH363>]: unsafe extern "C" fn() = {
+                static [<$name:upper _PATCH363>]: FuncVerStub = {
                     unsafe extern "C" {
-                        static mut [<$name _stub>]: unsafe extern "C" fn();
+                        static mut [<$name _stub>]: *const ();
                         fn [<$name _363>]();
                     }
-                    unsafe extern "C" fn patch() {
-                        unsafe { [<$name _stub>] = core::mem::transmute([<$name _363>] as *const ()) };
+                    FuncVerStub {
+                        stub: core::ptr::addr_of_mut!([<$name _stub>]),
+                        func_363: [<$name _363>] as *const (),
                     }
-                    patch
                 };
             }
         )*
@@ -121,24 +129,24 @@ macro_rules! libstub_ver {
 }
 
 unsafe extern "C" {
-    unsafe static __start_vita_patch363: unsafe extern "C" fn();
-    unsafe static __stop_vita_patch363: unsafe extern "C" fn();
+    unsafe static __start_vita_patch363: FuncVerStub;
+    unsafe static __stop_vita_patch363: FuncVerStub;
     unsafe fn ksceGUIDGetUIDVectorByClass_360();
 }
 
 pub fn init_stubs() {
     if stub_is_invalid(ksceGUIDGetUIDVectorByClass_360 as _) {
         unsafe {
-            let mut p = &raw const __start_vita_patch363;
-            let end = &raw const __stop_vita_patch363;
-            while p < end {
-                (*p)();
-                p = p.add(1);
+            let mut start = core::ptr::addr_of!(__start_vita_patch363);
+            let stop = core::ptr::addr_of!(__stop_vita_patch363);
+            while start < stop {
+                let patch = &*start;
+                *patch.stub = patch.func_363;
+                start = start.add(1);
             }
         }
     }
 }
-
 #[link(name = "SceSysmemForDriver_stub", kind = "static")]
 unsafe extern "C" {
     pub unsafe fn ksceKernelCopyFromUserProc(
@@ -197,7 +205,8 @@ libstub_ver!(SceThreadmgrForKernel, 0xA8CA0EFD, 0x7F8593BA,
 libstub_ver!(SceModulemgrForKernel, 0xC445FA63, 0x92C9FFC2,
     (0x97CF7B4E, 0xB72C75A4, ksceKernelGetModuleList(pid: SceUID, flags1: i32, flags2: i32, modids: *mut SceUID, num: *mut u32) -> i32),
     (0xD269F915, 0xDAA90093, ksceKernelGetModuleInfo(pid: SceUID, modid: SceUID, info: *mut SceKernelModuleInfo) -> i32),
-    (0x20A27FA9, 0x679F5144, ksceKernelGetModuleIdByPid(pid: SceUID) -> i32)
+    (0x20A27FA9, 0x679F5144, ksceKernelGetModuleIdByPid(pid: SceUID) -> i32),
+    (0xD269F915, 0xDAA90093, sceKernelGetModuleInfoForKernel(pid: SceUID, uid: SceUID, info: *mut SceKernelModuleInfo) -> i32)
 );
 
 // SKPLForKernel
@@ -208,4 +217,9 @@ vitastub!(SKPLForKernel, spl_exec_code, 0x18, 0x9fce5cbf, 0x4b856e73);
 
 pub fn spl_is_loaded() -> bool {
     !stub_is_invalid(spl_exec_code as _)
+}
+
+#[link(name = "taihenForKernel_stub", kind = "static")]
+unsafe extern "C" {
+    pub unsafe fn taiInjectDataForKernel(pid: SceUID, modid: SceUID, segidx: i32, offset: u32, data: *const c_void, size: usize) -> i32;
 }

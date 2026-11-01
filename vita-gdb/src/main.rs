@@ -5,6 +5,7 @@ mod cp14;
 mod gdb;
 mod kernel;
 mod mep;
+mod net_fixup;
 
 pub const GDB_PORT: u16 = 31337;
 
@@ -19,6 +20,11 @@ fn main() {
     gdb::handlers::register_exception_handlers();
     gdb::handlers::register_process_handlers();
     gdb::handlers::register_sysevent_handler();
+    /*
+    if let Err(err) = net_fixup::fixup_netrecv_bug() {
+        println!("fixup_netrecv_bug: {err}");
+    }
+    */
 
     if let Err(err) = cp14::enable_debug() {
         println!("enable_debug: {err}");

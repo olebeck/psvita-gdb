@@ -46,19 +46,7 @@ fn fud_bridge_exec(exec_addr: u32, args: &[u32]) -> Result<u32, SceError> {
     for (i, arg) in args.iter().take(8).enumerate() {
         bridge_data.args[i] = *arg;
     }
-    match unsafe {
-        spl_exec_code(
-            BRIDGE_NMP.as_ptr() as _,
-            BRIDGE_NMP.len(),
-            FUD_COMMS_PA,
-            true,
-        )
-    } {
-        1 => Err(SceError::new(-1, "fud_bridge_exec")),
-        2 => Err(SceError::new(-2, "fud_bridge_exec")),
-        3 => Err(SceError::new(-3, "fud_bridge_exec")),
-        val => Ok(val),
-    }
+    spl_exec(&BRIDGE_NMP, FUD_COMMS_PA)
 }
 
 pub fn mep_write32(dst: u32, val: u32) -> Result<(), SceError> {
@@ -70,4 +58,20 @@ pub fn mep_read32(addr: u32) -> Result<u32, SceError> {
     fud_bridge_exec(0x00807262, &[FUD_COMMS_PA + 0x10, addr, 0x4])?;
     let value = unsafe { FUD_COMMS.unwrap().1.add(0x10).cast::<u32>().read_volatile() };
     Ok(value)
+}
+
+pub fn spl_exec(code: &[u8], arg: u32) -> Result<u32, SceError>  {
+    match unsafe {
+        spl_exec_code(
+            code.as_ptr() as _,
+            code.len(),
+            arg,
+            true,
+        )
+    } {
+        1 => Err(SceError::new(-1, "spl_exec_code")),
+        2 => Err(SceError::new(-2, "spl_exec_code")),
+        3 => Err(SceError::new(-3, "spl_exec_code")),
+        val => Ok(val),
+    }
 }

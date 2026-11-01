@@ -1,7 +1,6 @@
 use core::ffi::c_void;
 use core::panic;
 use core::ptr::null_mut;
-use core::sync::atomic::{AtomicI32, Ordering};
 
 use gdbstub::target::ext::breakpoints::WatchKind;
 use vitasdk_sys::{
@@ -9,9 +8,8 @@ use vitasdk_sys::{
     SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2, SCE_EXCPMGR_EXCEPTION_NOT_HANDLED, SceExcpHandlingCode,
     SceExcpmgrExceptionContext, SceProcEventHandler, SceProcEventInvokeParam1,
     SceProcEventInvokeParam2, SceSysrootProcessHandler, SceUID,
-    ksceKernelChangeThreadSuspendStatus, ksceKernelCreateEventFlag,
-    ksceKernelRegisterProcEventHandler, ksceKernelRegisterSysEventHandler, ksceKernelSetEventFlag,
-    ksceKernelSysrootSetProcessHandler,
+    ksceKernelChangeThreadSuspendStatus, ksceKernelRegisterProcEventHandler,
+    ksceKernelRegisterSysEventHandler, ksceKernelSysrootSetProcessHandler,
 };
 
 use crate::cp14::enable_debug;

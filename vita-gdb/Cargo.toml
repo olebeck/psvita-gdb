@@ -23,5 +23,6 @@ vitasdk-sys = { git = "https://github.com/vita-rust/vitasdk-sys", features = [
     "SceIofilemgrForDriver_stub",
     "SceAppMgrForDriver_stub",
     "SceKernelSuspendForDriver_stub",
+    "SceModulemgrForDriver_stub",
 ] }
 arm-next-pc = { path = "../arm-next-pc" }
