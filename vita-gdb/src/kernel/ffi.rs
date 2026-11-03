@@ -161,7 +161,9 @@ unsafe extern "C" {
 
 libstub_ver!(SceSysmemForKernel, 0x63A519E5, 0x02451F0F,
     (0x30931572, 0x2995558D, ksceKernelCopyToUserProcTextDomain(pid: SceUID, dst: *mut c_void, src: *const c_void, len: usize) -> i32),
-    (0xEC7D36EF, 0x52137FA3, ksceGUIDGetUIDVectorByClass(cls: *const SceClass, vis_level: i32, vector: *mut SceUID, num: u32, ret_num: *mut u32) -> i32)
+    (0x67BAD5B4, 0x5EF1DAAF, ksceKernelCopyToUserTextDomain(dst: *mut c_void, src: *const c_void, len: usize) -> i32),
+    (0xEC7D36EF, 0x52137FA3, ksceGUIDGetUIDVectorByClass(cls: *const SceClass, vis_level: i32, vector: *mut SceUID, num: u32, ret_num: *mut u32) -> i32),
+    (0xAF729575, 0x86681B64, ksceKernelGetUIDMemBlockClass() -> *mut SceClass)
 );
 
 libstub!(SceSysrootForKernel, 0x3691DA45,
@@ -206,7 +208,7 @@ libstub_ver!(SceModulemgrForKernel, 0xC445FA63, 0x92C9FFC2,
     (0x97CF7B4E, 0xB72C75A4, ksceKernelGetModuleList(pid: SceUID, flags1: i32, flags2: i32, modids: *mut SceUID, num: *mut u32) -> i32),
     (0xD269F915, 0xDAA90093, ksceKernelGetModuleInfo(pid: SceUID, modid: SceUID, info: *mut SceKernelModuleInfo) -> i32),
     (0x20A27FA9, 0x679F5144, ksceKernelGetModuleIdByPid(pid: SceUID) -> i32),
-    (0xD269F915, 0xDAA90093, sceKernelGetModuleInfoForKernel(pid: SceUID, uid: SceUID, info: *mut SceKernelModuleInfo) -> i32)
+    (0x0053BA4A, 0x0C668636, ksceKernelGetModuleIdByAddrForDebugger(pid: SceUID, addr: *const c_void) -> i32)
 );
 
 // SKPLForKernel
@@ -221,5 +223,12 @@ pub fn spl_is_loaded() -> bool {
 
 #[link(name = "taihenForKernel_stub", kind = "static")]
 unsafe extern "C" {
-    pub unsafe fn taiInjectDataForKernel(pid: SceUID, modid: SceUID, segidx: i32, offset: u32, data: *const c_void, size: usize) -> i32;
+    pub unsafe fn taiInjectDataForKernel(
+        pid: SceUID,
+        modid: SceUID,
+        segidx: i32,
+        offset: u32,
+        data: *const c_void,
+        size: usize,
+    ) -> i32;
 }

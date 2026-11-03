@@ -26,6 +26,16 @@ fn main() {
     }
     */
 
+    if let Err(err) = hook_import!(
+        0x10005,
+        c"SceAppMgr",
+        0x4E29D3B6, // SceQafMgrForDriver
+        0x7B14DC45,
+        SceQafMgrForDriver_7B14DC45_hook
+    ) {
+        println!("hook_import: {err}");
+    }
+
     if let Err(err) = cp14::enable_debug() {
         println!("enable_debug: {err}");
         return;
@@ -35,3 +45,8 @@ fn main() {
         println!("start_gdb: {err}");
     }
 }
+
+// make SceAppMgr launch app read args
+hook!(fn SceQafMgrForDriver_7B14DC45_hook() -> i32 as hook_continue {
+    return 1;
+});

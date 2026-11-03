@@ -18,33 +18,52 @@ use gdbstub::{
             libraries::{Libraries, LibrariesOps},
             monitor_cmd::MonitorCmdOps,
             process_info::{ProcessInfo, ProcessInfoOps, ProcessInfoResponse},
+            section_offsets::{Offsets, SectionOffsets, SectionOffsetsOps},
         },
     },
 };
 use gdbstub_arch::arm::ArmBreakpointKind;
-use vitasdk_sys::{
-    SCE_EVENT_WAITCLEAR_PAT, SceAppMgrLaunchParam, SceUID, ksceAppMgrKillProcess,
-    ksceAppMgrLaunchAppByPath,
-};
+use vitasdk_sys::{SceAppMgrLaunchParam, SceUID, ksceAppMgrKillProcess, ksceAppMgrLaunchAppByPath};
 
 use crate::{
     cp14::is_debug_enabled,
-    gdb::{
-        armv7::Armv7,
-        sessions::{EV_PROCESS_STARTED, GdbSession},
-    },
+    gdb::{armv7::Armv7, sessions::GdbSession},
     kernel::{
         event_flag::EventFlagRef,
         ffi::ksceKernelGetModuleIdByPid,
+        thread::delay_thread,
         utils::{
             ArgvWriter, SceError, StreamWriter, get_module_ids, get_module_info, get_process_ids,
-            halt_process, resume_process,
+            get_process_status, halt_process, resume_process,
         },
     },
     println, sce_call,
 };
 
 const FAKE_PID: Pid = const { Pid::new(1).unwrap() };
+
+fn is_title_id(value: &str) -> bool {
+    value.len() == 9
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+}
+
+fn wait_for_process(pid: SceUID) -> Result<(), SceError> {
+    let mut last_err = SceError::new(-1, "get_process_status");
+    for _ in 0..1000 {
+        match get_process_status(pid) {
+            Ok(status) => {
+                if status & 0x10 != 0 {
+                    return Ok(());
+                }
+            }
+            Err(err) => last_err = err,
+        }
+        delay_thread(10_000);
+    }
+    Err(last_err)
+}
 
 pub struct VitaTarget {
     pub(crate) session: Option<GdbSession>,
@@ -82,7 +101,7 @@ impl VitaTarget {
             return false;
         }
         let Some(session) = GdbSession::new(self.evflag, pid) else {
-            println!("no free gdb session slots");
+            println!("gdb session for pid {pid} already exists or no free slots");
             return false;
         };
         self.session = Some(session);
@@ -146,6 +165,11 @@ impl Target for VitaTarget {
     fn support_exec_file(&mut self) -> Option<ExecFileOps<'_, Self>> {
         Some(self)
     }
+
+    #[inline(always)]
+    fn support_section_offsets(&mut self) -> Option<SectionOffsetsOps<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl ExtendedMode for VitaTarget {
@@ -200,7 +224,7 @@ impl ExtendedMode for VitaTarget {
         })
     }
 
-    fn run(&mut self, filename: Option<&[u8]>, _args: Args<'_, '_>) -> TargetResult<Pid, Self> {
+    fn run(&mut self, filename: Option<&[u8]>, args: Args<'_, '_>) -> TargetResult<Pid, Self> {
         let Some(filename) = filename else {
             println!("run: no filename");
             return Err(TargetError::NonFatal);
@@ -213,30 +237,42 @@ impl ExtendedMode for VitaTarget {
             }
         };
 
-        let mut titleid = "MLCL05505";
         let mut path_buf = [0u8; 128];
         let mut writer = StreamWriter::new(&mut path_buf, 0);
-        if filename.len() == 9 {
+        let titleid = if is_title_id(filename) {
             let _ = write!(writer, "ux0:app/{filename}/eboot.bin");
-            titleid = filename;
+            Some(filename)
         } else {
             let _ = write!(writer, "{filename}");
-        }
-        let executable_path: &CStr = writer.into_cstr().map_err(|_| {
+            None
+        };
+        let Some(executable_path) = writer.into_cstr() else {
             println!("filename too long");
-            TargetError::NonFatal
-        })?;
+            return Err(TargetError::NonFatal);
+        };
 
-        // TODO: doesnt get set correctly
         let mut launch_args = ArgvWriter::new();
-        launch_args.add("-titleid", titleid);
+        if let Some(titleid) = titleid {
+            if !launch_args.add("-titleid", titleid) {
+                println!("run: launch arguments too long");
+                return Err(TargetError::NonFatal);
+            }
+        }
+        for arg in args {
+            if !launch_args.add_arg(arg) {
+                println!("run: launch arguments too long");
+                return Err(TargetError::NonFatal);
+            }
+        }
         let launch_args = launch_args.to_slice();
+
+        const SCE_APPMGR_LAUNCH_PARAM_FLAG_DEBUG_SUSPEND: u32 = 0x80000000;
 
         let pid = sce_call!(ksceAppMgrLaunchAppByPath(
             executable_path.as_ptr(),
             launch_args.as_ptr() as _,
             launch_args.len() as _,
-            0x80000000,
+            SCE_APPMGR_LAUNCH_PARAM_FLAG_DEBUG_SUSPEND,
             &SceAppMgrLaunchParam {
                 size: size_of::<SceAppMgrLaunchParam>() as u32,
                 unk_4: 1 << 31,
@@ -254,24 +290,10 @@ impl ExtendedMode for VitaTarget {
             return Err(TargetError::NonFatal);
         }
 
-        // wait for launch
-        if let Err(err) = match self.evflag.wait_timeout(
-            EV_PROCESS_STARTED,
-            SCE_EVENT_WAITCLEAR_PAT,
-            10 * 1000 * 1000,
-        ) {
-            Ok(Some(_)) => Ok(()),
-            Err(err) => {
-                println!("run wait: {err}");
-                Err(TargetError::NonFatal)
-            }
-            Ok(None) => {
-                println!("run wait timeout");
-                Err(TargetError::NonFatal)
-            }
-        } {
+        if let Err(err) = wait_for_process(pid) {
+            println!("run: process {pid} did not start: {err}");
             self.detach();
-            return Err(err);
+            return Err(TargetError::NonFatal);
         }
 
         let pid = Pid::new(pid as _).ok_or(TargetError::NonFatal)?;
@@ -331,6 +353,35 @@ impl Libraries for VitaTarget {
         }
         let _ = write!(writer, "</library-list>");
         Ok(writer.written())
+    }
+}
+
+impl SectionOffsets for VitaTarget {
+    fn get_section_offsets(
+        &mut self,
+    ) -> Result<Offsets<<Self::Arch as gdbstub::arch::Arch>::Usize>, Self::Error> {
+        let Some(pid) = self.pid() else {
+            return Err(SceError::new(-1, "no pid"));
+        };
+
+        let modid = match sce_call!(ksceKernelGetModuleIdByPid(pid)) {
+            Ok(modid) => modid,
+            Err(err) => {
+                println!("get_section_offsets: {err}");
+                return Err(err);
+            }
+        };
+        let info = match get_module_info(pid, modid) {
+            Ok(info) => info,
+            Err(err) => {
+                println!("get_section_offsets: {err} pid={pid} modid={modid}");
+                return Err(err);
+            }
+        };
+        Ok(Offsets::Segments {
+            text_seg: info.segments[0].vaddr as _,
+            data_seg: Some(info.segments[1].vaddr as _),
+        })
     }
 }
 
@@ -438,11 +489,13 @@ impl HwBreakpoint for VitaTarget {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
-        if let Err(err) = session.set_hw_breakpoint(addr) {
-            println!("set_hw_breakpoint: {err}");
-            return Ok(false);
-        };
-        Ok(true)
+        match session.set_hw_breakpoint(addr) {
+            Ok(ok) => Ok(ok),
+            Err(err) => {
+                println!("set_hw_breakpoint: {err}");
+                Ok(false)
+            }
+        }
     }
 
     fn remove_hw_breakpoint(
@@ -453,11 +506,13 @@ impl HwBreakpoint for VitaTarget {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
-        if let Err(err) = session.clear_hw_breakpoint(addr) {
-            println!("clear_hw_breakpoint: {err}");
-            return Ok(false);
-        };
-        Ok(true)
+        match session.clear_hw_breakpoint(addr) {
+            Ok(ok) => Ok(ok),
+            Err(err) => {
+                println!("clear_hw_breakpoint: {err}");
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -471,11 +526,13 @@ impl HwWatchpoint for VitaTarget {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
-        if let Err(err) = session.set_hw_watchpoint(addr, len, kind) {
-            println!("set_hw_watchpoint: {err}");
-            return Ok(false);
-        };
-        Ok(true)
+        match session.set_hw_watchpoint(addr, len, kind) {
+            Ok(ok) => Ok(ok),
+            Err(err) => {
+                println!("set_hw_watchpoint: {err}");
+                Ok(false)
+            }
+        }
     }
 
     fn remove_hw_watchpoint(
@@ -487,10 +544,12 @@ impl HwWatchpoint for VitaTarget {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
-        if let Err(err) = session.clear_hw_watchpoint(addr) {
-            println!("clear_hw_watchpoint: {err}");
-            return Ok(false);
-        };
-        Ok(true)
+        match session.clear_hw_watchpoint(addr) {
+            Ok(ok) => Ok(ok),
+            Err(err) => {
+                println!("clear_hw_watchpoint: {err}");
+                Ok(false)
+            }
+        }
     }
 }

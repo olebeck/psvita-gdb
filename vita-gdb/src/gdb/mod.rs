@@ -1,5 +1,6 @@
 pub mod armv7;
 pub mod event_loop;
+pub mod exception_report;
 pub mod handlers;
 pub mod main;
 pub mod monitor;

@@ -24,10 +24,10 @@ const PID_UNUSED: i32 = -1;
 
 pub const EV_WAKE_WORKER: u32 = 1 << 0;
 pub const EV_WAKE_READER: u32 = 1 << 1;
-pub const EV_PROCESS_STARTED: u32 = 1 << 4;
 
 static SESSION_POOL: [GdbSessionInner; MAX_SESSIONS] =
     [const { GdbSessionInner::uninit() }; MAX_SESSIONS];
+static SESSION_ALLOC_LOCK: Spinlock<()> = Spinlock::new(());
 
 #[derive(Copy, Clone, Debug)]
 pub enum ExceptionKind {
@@ -36,6 +36,7 @@ pub enum ExceptionKind {
     Undef,
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum ExceptionEvent {
     HwBreak {
         tid: SceUID,
@@ -112,6 +113,7 @@ impl GdbSessionInner {
         self.hw_watchpoints.lock().fill(None);
         self.sw_breakpoints.lock().fill(None);
         *self.step.lock() = None;
+        *self.step_result.lock() = None;
         self.exited.store(false, Ordering::Release);
         self.exceptions.clear();
         self.pid.store(PID_UNUSED, Ordering::Release);
@@ -207,11 +209,13 @@ impl GdbSessionInner {
             let Some(slot) = slot else {
                 continue;
             };
-            if slot.kind != kind {
-                sce_call!(sceKernelSetPHWP(pid, idx as _, addr, wp_control(kind)))?;
-                slot.kind = kind;
+            if slot.addr == addr {
+                if slot.kind != kind {
+                    sce_call!(sceKernelSetPHWP(pid, idx as _, addr, wp_control(kind)))?;
+                    slot.kind = kind;
+                }
+                return Ok(true);
             }
-            return Ok(true);
         }
 
         for (idx, slot) in wps.iter_mut().enumerate() {
@@ -421,6 +425,14 @@ pub struct GdbSession {
 
 impl GdbSession {
     pub fn new(flag: EventFlagRef, pid: SceUID) -> Option<Self> {
+        let _guard = SESSION_ALLOC_LOCK.lock();
+        if SESSION_POOL
+            .iter()
+            .any(|s| s.pid.load(Ordering::Acquire) == pid)
+        {
+            return None;
+        }
+
         let slot = SESSION_POOL.iter().position(|s| {
             s.pid
                 .compare_exchange(PID_UNUSED, pid, Ordering::AcqRel, Ordering::Acquire)
@@ -496,6 +508,7 @@ impl GdbSession {
         for (idx, slot) in wps.iter_mut().enumerate() {
             if slot.is_some() {
                 let _ = sce_call!(sceKernelSetPHWP(pid, idx as _, 0, 0));
+                *slot = None;
             }
         }
 

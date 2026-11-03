@@ -1,23 +1,28 @@
 use core::{
-    ffi::{CStr, c_void}, fmt::{Debug, Display, Write}, mem::zeroed, ptr::null_mut,
+    ffi::{CStr, c_void},
+    fmt::{Debug, Display, Write},
+    mem::zeroed,
+    ptr::null_mut,
 };
 
 use vitasdk_sys::{
-    SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR, SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_IO_NC_RW,
-    SceKernelAllocMemBlockKernelOpt, SceKernelModuleInfo, SceKernelProcessContext,
-    SceKernelThreadContextInfo, SceKernelThreadInfo, SceUID, ksceKernelAllocMemBlock,
-    ksceKernelChangeThreadSuspendStatus, ksceKernelFreeMemBlock, ksceKernelGetMemBlockBase,
-    ksceKernelGetProcessStatus, ksceKernelGetThreadIdList, ksceKernelGetThreadInfo,
-    ksceKernelProcessGetContext, ksceKernelProcessSwitchContext,
+    SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR, SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_IO_NC_RW, SceClass,
+    SceKernelAllocMemBlockKernelOpt, SceKernelIntrStatus, SceKernelMemBlockInfoEx,
+    SceKernelModuleInfo, SceKernelProcessContext, SceKernelThreadContextInfo, SceKernelThreadInfo,
+    SceUID, ksceKernelAllocMemBlock, ksceKernelChangeThreadSuspendStatus, ksceKernelFreeMemBlock,
+    ksceKernelGetMemBlockBase, ksceKernelGetMemBlockInfo, ksceKernelGetProcessStatus,
+    ksceKernelGetThreadIdList, ksceKernelGetThreadInfo, ksceKernelProcessGetContext,
+    ksceKernelProcessSwitchContext,
 };
 
 use crate::kernel::{
     ffi::{
-        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserProcTextDomain, ksceKernelCpuResumeIntr,
+        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelCpuResumeIntr,
         ksceKernelCpuSuspendIntr, ksceKernelGetModuleInfo, ksceKernelGetModuleList,
         ksceKernelGetProcessMainThread, ksceKernelGetThreadContextInfo,
-        ksceKernelGetUIDProcessClass, ksceKernelL1IcacheInvalidateEntireAllCore,
-        ksceKernelResumeProcess, ksceKernelSuspendProcess, ksceKernelSysrootGetProcessTitleId,
+        ksceKernelGetUIDMemBlockClass, ksceKernelGetUIDProcessClass,
+        ksceKernelL1IcacheInvalidateEntireAllCore, ksceKernelResumeProcess,
+        ksceKernelSuspendProcess, ksceKernelSysrootGetProcessTitleId,
     },
     thread::delay_thread,
 };
@@ -78,13 +83,12 @@ impl<'a> StreamWriter<'a> {
         self.written
     }
 
-    pub fn into_cstr(self) -> Result<&'a CStr, CStrError> {
-        if self.written < self.buf.len() {
-            self.buf[self.written] = 0;
-            CStr::from_bytes_with_nul(&self.buf[..=self.written]).map_err(|_| CStrError::InvalidNul)
-        } else {
-            Err(CStrError::BufferTooSmall)
+    pub fn into_cstr(self) -> Option<&'a CStr> {
+        if self.written >= self.buf.len() {
+            return None;
         }
+        self.buf[self.written] = 0;
+        CStr::from_bytes_with_nul(&self.buf[..=self.written]).ok()
     }
 }
 
@@ -108,20 +112,20 @@ impl<'a> Write for StreamWriter<'a> {
 }
 
 pub struct ArgvWriter {
-    buf: [u8; 32],
+    buf: [u8; 256],
     offset: usize,
 }
 
 impl ArgvWriter {
     pub fn new() -> Self {
         Self {
-            buf: [0u8; 32],
+            buf: [0u8; 256],
             offset: 0,
         }
     }
 
     fn append(&mut self, data: &[u8]) -> bool {
-        if self.offset + data.len() >= self.buf.len() {
+        if self.offset + data.len() + 3 > self.buf.len() {
             return false;
         }
         self.buf[self.offset..self.offset + data.len()].copy_from_slice(data);
@@ -130,40 +134,39 @@ impl ArgvWriter {
     }
 
     pub fn add(&mut self, name: &str, value: &str) -> bool {
-        let name = name.as_bytes();
-        let value = value.as_bytes();
-        if !self.append(name) {
-            return false;
-        }
-        if !self.append(value) {
-            return false;
-        }
-        return true;
+        self.append(name.as_bytes()) && self.append(value.as_bytes())
+    }
+
+    pub fn add_arg(&mut self, arg: &[u8]) -> bool {
+        self.append(arg)
     }
 
     pub fn to_slice(&self) -> &[u8] {
-        &self.buf[..self.offset]
+        &self.buf[..(self.offset + 1).min(self.buf.len())]
     }
 }
 
-#[derive(Debug)]
-pub enum CStrError {
-    BufferTooSmall,
-    InvalidNul,
+fn get_class_uid_vec<const N: usize>(
+    sce_class: *mut SceClass,
+) -> Result<impl Iterator<Item = SceUID>, SceError> {
+    let mut uids = [0; N];
+    let mut count = 0;
+    sce_call!(ksceGUIDGetUIDVectorByClass(
+        sce_class,
+        8,
+        uids.as_mut_ptr(),
+        uids.len() as u32,
+        &mut count
+    ))?;
+    Ok(uids.into_iter().take(count as usize))
 }
 
 pub fn get_process_ids() -> Result<impl Iterator<Item = SceUID>, SceError> {
-    let proc_class = unsafe { ksceKernelGetUIDProcessClass() };
-    let mut proc_uids = [0i32; 16];
-    let mut proc_num: u32 = 0;
-    sce_call!(ksceGUIDGetUIDVectorByClass(
-        proc_class,
-        8,
-        proc_uids.as_mut_ptr(),
-        proc_uids.len() as _,
-        &mut proc_num as _
-    ))?;
-    Ok(proc_uids.into_iter().take(proc_num as usize))
+    get_class_uid_vec::<16>(unsafe { ksceKernelGetUIDProcessClass() })
+}
+
+pub fn get_memblock_ids() -> Result<impl Iterator<Item = SceUID>, SceError> {
+    get_class_uid_vec::<128>(unsafe { ksceKernelGetUIDMemBlockClass() })
 }
 
 pub fn get_thread_ids(pid: SceUID) -> Result<impl Iterator<Item = SceUID>, SceError> {
@@ -175,8 +178,8 @@ pub fn get_thread_ids(pid: SceUID) -> Result<impl Iterator<Item = SceUID>, SceEr
         ids.len() as _,
         &mut copy_count
     ))?;
-    assert!((copy_count as usize) < ids.len());
-    Ok(ids.into_iter().take(copy_count as usize))
+    let count = copy_count.max(0) as usize;
+    Ok(ids.into_iter().take(count.min(ids.len())))
 }
 
 pub fn get_module_ids(pid: SceUID) -> Result<impl Iterator<Item = SceUID>, SceError> {
@@ -206,6 +209,13 @@ pub fn get_module_info(pid: SceUID, modid: SceUID) -> Result<SceKernelModuleInfo
     Ok(info)
 }
 
+pub fn get_memblock_info(uid: SceUID) -> Result<SceKernelMemBlockInfoEx, SceError> {
+    let mut info: SceKernelMemBlockInfoEx = unsafe { core::mem::zeroed() };
+    info.size = core::mem::size_of::<SceKernelMemBlockInfoEx>() as _;
+    sce_call!(ksceKernelGetMemBlockInfo(uid, 7, &mut info))?;
+    Ok(info)
+}
+
 pub fn get_process_status(pid: SceUID) -> Result<u32, SceError> {
     let mut status: i32 = 0;
     sce_call!(ksceKernelGetProcessStatus(pid, &mut status))?;
@@ -225,25 +235,28 @@ impl TitleId {
     pub fn new() -> Self {
         Self([0u8; 16])
     }
+    const fn new_static(value: &str) -> Self {
+        if value.len() > 16 {
+            panic!("TitleId must be at most 16 bytes");
+        }
+        let mut buf = [0u8; 16];
+        let bytes = value.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            buf[i] = bytes[i];
+            i += 1;
+        }
+        Self(buf)
+    }
     pub fn as_str(&self) -> &str {
         let len = self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len());
         core::str::from_utf8(&self.0[..len]).unwrap_or("")
     }
 }
 
-impl PartialEq<str> for TitleId {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl From<&CStr> for TitleId {
-    fn from(value: &CStr) -> Self {
-        let mut title_id = [0u8; 16];
-        let bytes = value.to_bytes();
-        let len = bytes.len().min(title_id.len());
-        title_id[..len].copy_from_slice(&bytes[..len]);
-        Self(title_id)
+impl PartialEq<&str> for TitleId {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
     }
 }
 
@@ -255,17 +268,16 @@ impl Display for TitleId {
 
 pub fn get_process_titleid(pid: SceUID) -> Option<TitleId> {
     if pid == 0x10005 {
-        return Some(c"kernel".into());
+        return Some(TitleId::new_static("kernel"));
     }
-    let mut titleid = TitleId::new();
-    match sce_call!(ksceKernelSysrootGetProcessTitleId(
+    let mut buf = TitleId::new();
+    sce_call!(ksceKernelSysrootGetProcessTitleId(
         pid,
-        titleid.0.as_mut_ptr() as _,
-        titleid.0.len() as _
-    )) {
-        Err(_) => None,
-        Ok(_) => Some(titleid),
-    }
+        buf.0.as_mut_ptr() as _,
+        buf.0.len() as _
+    ))
+    .ok();
+    Some(buf).filter(|t| !t.as_str().is_empty())
 }
 
 pub const PROCESS_HALT_STATUS: i32 = 0x1C;
@@ -349,29 +361,39 @@ pub fn name_to_str(name: &[i8]) -> &str {
     }
 }
 
+struct ProcessContextGuard {
+    prev: SceKernelProcessContext,
+    intr: SceKernelIntrStatus,
+}
+
+impl ProcessContextGuard {
+    fn enter(pid: SceUID) -> Result<Self, SceError> {
+        let mut proc_ctx: *mut SceKernelProcessContext = null_mut();
+        sce_call!(ksceKernelProcessGetContext(pid, &raw mut proc_ctx))?;
+        let intr = unsafe { ksceKernelCpuSuspendIntr() };
+        let mut prev = unsafe { zeroed() };
+        sce_call!(ksceKernelProcessSwitchContext(proc_ctx, &raw mut prev)).inspect_err(|_| {
+            unsafe { ksceKernelCpuResumeIntr(intr) };
+        })?;
+        Ok(Self { prev, intr })
+    }
+}
+
+impl Drop for ProcessContextGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { ksceKernelProcessSwitchContext(&mut self.prev, null_mut()) };
+        let _ = unsafe { ksceKernelCpuResumeIntr(self.intr) };
+    }
+}
+
 pub fn write_user_text(pid: SceUID, dst: u32, buf: &[u8]) -> Result<(), SceError> {
-    sce_call!(ksceKernelCopyToUserProcTextDomain(
-        pid,
-        dst as _,
-        buf.as_ptr() as _,
-        buf.len() as _
+    let ctx = ProcessContextGuard::enter(pid)?;
+    sce_call!(ksceKernelCopyToUserTextDomain(
+        dst as *mut c_void,
+        buf.as_ptr() as *const c_void,
+        buf.len()
     ))?;
-
-    let intr = unsafe { ksceKernelCpuSuspendIntr() };
-    let mut proc_ctx: *mut SceKernelProcessContext = null_mut();
-    sce_call!(ksceKernelProcessGetContext(pid, &raw mut proc_ctx))?;
-    let mut prev_context: SceKernelProcessContext = unsafe { zeroed() };
-    sce_call!(ksceKernelProcessSwitchContext(
-        proc_ctx,
-        &raw mut prev_context
-    ))?;
-
     unsafe { ksceKernelL1IcacheInvalidateEntireAllCore() };
-
-    sce_call!(ksceKernelProcessSwitchContext(
-        &mut prev_context,
-        null_mut()
-    ))?;
-    unsafe { ksceKernelCpuResumeIntr(intr) };
+    drop(ctx);
     Ok(())
 }

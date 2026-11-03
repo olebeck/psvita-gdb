@@ -85,6 +85,11 @@ impl<T: 'static> JoinableThread<T> {
         sce_call!(ksceKernelDeleteThread(self.thid))?;
         Ok(status)
     }
+
+    pub fn delete(self) -> Result<(), SceError> {
+        sce_call!(ksceKernelDeleteThread(self.thid))?;
+        Ok(())
+    }
 }
 
 pub struct DetachedThread<T> {

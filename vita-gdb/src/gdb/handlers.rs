@@ -13,9 +13,8 @@ use vitasdk_sys::{
 };
 
 use crate::cp14::enable_debug;
-use crate::gdb::sessions::{
-    EV_PROCESS_STARTED, ExceptionEvent, ExceptionKind, find_session_for_pid,
-};
+use crate::gdb::exception_report;
+use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, find_session_for_pid};
 use crate::kernel::utils::PROCESS_HALT_STATUS;
 use crate::kernel::{
     ffi::{ksceExcpmgrRegisterHandler, ksceKernelCopyFromUserProc, ksceKernelSuspendProcess},
@@ -46,7 +45,7 @@ fn fsr_is_debug(fsr: u32) -> bool {
 }
 
 fn is_thumb(ctx: &SceExcpmgrExceptionContext) -> bool {
-    (ctx.CPACR >> 5) & 1 != 0
+    (ctx.SPSR >> 5) & 1 != 0
 }
 
 #[macro_export]
@@ -134,7 +133,6 @@ fn handle_prefetch_abort(
     context: &SceExcpmgrExceptionContext,
     code: SceExcpHandlingCode,
 ) -> SceExcpHandlingCode {
-    println!("handle_prefetch_abort");
     if fsr_is_debug(context.IFSR) {
         return handle_break(context, code);
     }
@@ -145,7 +143,6 @@ fn handle_data_abort(
     context: &SceExcpmgrExceptionContext,
     code: SceExcpHandlingCode,
 ) -> SceExcpHandlingCode {
-    println!("handle_data_abort");
     if fsr_is_debug(context.DFSR) {
         return handle_watch(context, code);
     }
@@ -156,7 +153,6 @@ fn handle_undef(
     context: &SceExcpmgrExceptionContext,
     _code: SceExcpHandlingCode,
 ) -> SceExcpHandlingCode {
-    println!("handle_undef");
     handle_exception(context, ExceptionKind::Undef, 0)
 }
 
@@ -165,6 +161,9 @@ fn handle_watch(
     _code: SceExcpHandlingCode,
 ) -> SceExcpHandlingCode {
     let (pid, tid) = get_thread_context_info();
+    let write = dfsr_is_write(context.DFSR);
+    exception_report::report_watch(context, pid, tid, write);
+
     let Some(session) = find_session_for_pid(pid) else {
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     };
@@ -175,7 +174,7 @@ fn handle_watch(
         );
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     }
-    let kind = if dfsr_is_write(context.DFSR) {
+    let kind = if write {
         WatchKind::Write
     } else {
         WatchKind::Read
@@ -196,22 +195,23 @@ fn handle_break(
 ) -> SceExcpHandlingCode {
     let fault_addr = context.address_of_faulting_instruction;
     let (pid, tid) = get_thread_context_info();
-    println!(
-        "handle_break tid={} ifsr={:x} ifar={:x} fault_addr={:x}",
-        tid, context.IFSR, context.IFAR, fault_addr
-    );
+    if false {
+        exception_report::report_break(context, pid, tid);
+    }
 
     let Some(session) = find_session_for_pid(pid) else {
         println!("no session for pid={pid}");
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     };
 
+    let thumb = is_thumb(context);
+    let read_len = if thumb { 2 } else { 4 };
     let mut insn = [0u8; 4];
     if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
         pid,
         insn.as_mut_ptr() as _,
         fault_addr as _,
-        insn.len()
+        read_len
     )) {
         println!("handle_break: {err}");
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
@@ -220,7 +220,7 @@ fn handle_break(
 
     if session.is_step(fault_addr) {
         session.step_finished();
-    } else if is_bkpt(&insn, is_thumb(context)) {
+    } else if is_bkpt(&insn, thumb) {
         session.push_excp(ExceptionEvent::SwBreak { tid });
     } else {
         session.push_excp(ExceptionEvent::HwBreak { tid });
@@ -234,10 +234,8 @@ fn handle_exception(
     addr: u32,
 ) -> SceExcpHandlingCode {
     let (pid, tid) = get_thread_context_info();
-    println!(
-        "handle_exception pid={pid} tid={tid} excp={kind:?} addr={addr:x} ifsr={:x} dfsr={:x}",
-        context.IFSR, context.DFSR
-    );
+    exception_report::report_exception(context, pid, tid, kind, addr);
+
     let Some(session) = find_session_for_pid(pid) else {
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     };
@@ -279,22 +277,27 @@ static PROC_HANDLER: SceSysrootProcessHandler = SceSysrootProcessHandler {
 };
 
 unsafe extern "C" fn handle_proc_create(
-    pid: SceUID,
+    _pid: SceUID,
     _a2: *mut SceProcEventInvokeParam2,
     _a3: i32,
 ) -> i32 {
     //println!("handle_proc_create pid={pid}");
-    if let Some(session) = find_session_for_pid(pid) {
-        if let Some(evflag) = session.evflag() {
-            if let Err(err) = evflag.set(EV_PROCESS_STARTED) {
-                println!("handle_proc_create: {err}")
-            }
-        }
-    }
     0
 }
 
 unsafe extern "C" fn handle_proc_kill(
+    pid: SceUID,
+    _a2: *mut SceProcEventInvokeParam1,
+    _a3: i32,
+) -> i32 {
+    //println!("handle_proc_kill pid={pid}");
+    if let Some(session) = find_session_for_pid(pid) {
+        session.push_exited();
+    }
+    0
+}
+
+unsafe extern "C" fn handle_proc_exit(
     pid: SceUID,
     _a2: *mut SceProcEventInvokeParam1,
     _a3: i32,
@@ -309,7 +312,7 @@ unsafe extern "C" fn handle_proc_kill(
 static PROC_HANDLER2: SceProcEventHandler = SceProcEventHandler {
     size: size_of::<SceProcEventHandler>() as u32,
     create: Some(handle_proc_create),
-    exit: None,
+    exit: Some(handle_proc_exit),
     kill: Some(handle_proc_kill),
     stop: None,
     start: None,

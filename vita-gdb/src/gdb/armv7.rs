@@ -131,6 +131,8 @@ pub struct Armv7Regs {
     pub pc: u32,
     /// Current Program Status Register (cpsr)
     pub cpsr: u32,
+    /// Saved Program Status Register (spsr)
+    pub spsr: u32,
     // VFPv3 / NEON D0-D31
     pub d: [u64; 32],
     /// Floating Point Status and Control Register.

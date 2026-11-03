@@ -60,15 +60,8 @@ pub fn mep_read32(addr: u32) -> Result<u32, SceError> {
     Ok(value)
 }
 
-pub fn spl_exec(code: &[u8], arg: u32) -> Result<u32, SceError>  {
-    match unsafe {
-        spl_exec_code(
-            code.as_ptr() as _,
-            code.len(),
-            arg,
-            true,
-        )
-    } {
+pub fn spl_exec(code: &[u8], arg: u32) -> Result<u32, SceError> {
+    match unsafe { spl_exec_code(code.as_ptr() as _, code.len(), arg, true) } {
         1 => Err(SceError::new(-1, "spl_exec_code")),
         2 => Err(SceError::new(-2, "spl_exec_code")),
         3 => Err(SceError::new(-3, "spl_exec_code")),

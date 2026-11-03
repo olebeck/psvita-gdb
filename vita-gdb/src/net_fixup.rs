@@ -4,7 +4,7 @@ use vitasdk_sys::{SceKernelModuleInfo, ksceKernelSearchModuleByName};
 
 use crate::{
     kernel::{
-        ffi::{sceKernelGetModuleInfoForKernel, taiInjectDataForKernel},
+        ffi::{ksceKernelGetModuleInfo, taiInjectDataForKernel},
         utils::SceError,
     },
     println, sce_call,
@@ -36,12 +36,11 @@ const PATCHED_CODE: [u8; 26] = [
 
 pub fn fixup_netrecv_bug() -> Result<(), SceError> {
     let netps_id = sce_call!(ksceKernelSearchModuleByName(c"SceNetPs".as_ptr() as _))?;
-    let mut info: SceKernelModuleInfo = SceKernelModuleInfo { size: size_of::<SceKernelModuleInfo>() as _, ..unsafe { zeroed() } };
-    sce_call!(sceKernelGetModuleInfoForKernel(
-        0x10005,
-        netps_id,
-        &raw mut info
-    ))?;
+    let mut info: SceKernelModuleInfo = SceKernelModuleInfo {
+        size: size_of::<SceKernelModuleInfo>() as _,
+        ..unsafe { zeroed() }
+    };
+    sce_call!(ksceKernelGetModuleInfo(0x10005, netps_id, &raw mut info))?;
     let text = unsafe {
         core::slice::from_raw_parts(
             info.segments[0].vaddr as *const u8,

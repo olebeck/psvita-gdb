@@ -4,6 +4,7 @@ pub mod mpsc;
 pub mod panic;
 pub mod printf;
 pub mod spinlock;
+pub mod taihen;
 pub mod tcp_socket;
 pub mod thread;
 pub mod utils;

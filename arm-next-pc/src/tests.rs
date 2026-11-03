@@ -36,14 +36,6 @@ mod tests {
     }
 
     fn arm(bytes: &[u8], pc: u32) -> (RegContext, TestMemory) {
-        println!(
-            "bytes: {}",
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join("")
-        );
         let mut memory = TestMemory::new();
         memory.add(pc as usize, bytes);
 
@@ -57,19 +49,8 @@ mod tests {
     }
 
     fn thumb(bytes: &[u8], pc: u32) -> (RegContext, TestMemory) {
-        println!(
-            "bytes: {}",
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join("")
-        );
-        let mut instruction = [0u8; 4];
-        instruction[..bytes.len()].copy_from_slice(bytes);
-
         let mut memory = TestMemory::new();
-        memory.add(pc as usize, &instruction);
+        memory.add(pc as usize, bytes);
 
         (
             RegContext {
@@ -101,7 +82,7 @@ mod tests {
 
     #[test]
     fn thumb_fallthrough_wide_instruction() {
-        let bytes = asm_bytes!(thumb, "bl #0");
+        let bytes: &[u8] = &[0x40, 0xf2, 0x00, 0x00];
         let (regs, memory) = thumb(bytes, 0x1000);
 
         assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1004, true));
@@ -333,6 +314,14 @@ mod tests {
     }
 
     #[test]
+    fn arm_blx_immediate_includes_h_bit() {
+        let bytes: &[u8] = &[0x00, 0x00, 0x00, 0xfb];
+        let (regs, memory) = arm(bytes, 0x1000);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x100a, true));
+    }
+
+    #[test]
     fn arm_bx_pc_uses_architectural_pc() {
         let bytes = asm_bytes!(arm, "bx pc");
         let (regs, memory) = arm(bytes, 0x1000);
@@ -378,6 +367,14 @@ mod tests {
         assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1234, false));
     }
 
+    #[test]
+    fn thumb_blx_imm_to_arm() {
+        let bytes: &[u8] = &[0x00, 0xf0, 0x00, 0xeb];
+        let (regs, memory) = thumb(bytes, 0x8102d20e);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x8102d810, false));
+    }
+
     // Thumb conditional / unconditional branches
 
     #[test]
@@ -387,7 +384,7 @@ mod tests {
 
         regs.cpsr |= 1 << 30;
 
-        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1002, true));
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1004, true));
     }
 
     #[test]
@@ -403,7 +400,49 @@ mod tests {
         let bytes = asm_bytes!(thumb, "b #0");
         let (regs, memory) = thumb(bytes, 0x1000);
 
-        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1004, true));
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1002, true));
+    }
+
+    #[test]
+    fn thumb_bl_forward() {
+        let bytes = asm_bytes!(thumb, "bl #8");
+        let (regs, memory) = thumb(bytes, 0x1000);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1008, true));
+    }
+
+    #[test]
+    fn thumb_b_wide_backward() {
+        let bytes: &[u8] = &[0xff, 0xf7, 0xfc, 0xbf];
+        let (regs, memory) = thumb(bytes, 0x1000);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x0ffc, true));
+    }
+
+    #[test]
+    fn thumb_cbz_uses_pc_relative_offset() {
+        let bytes: &[u8] = &[0x10, 0xb1];
+        let (mut regs, memory) = thumb(bytes, 0x1000);
+        regs.r[0] = 0;
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1008, true));
+    }
+
+    #[test]
+    fn thumb_cbnz_not_taken_falls_through() {
+        let bytes: &[u8] = &[0x10, 0xb9];
+        let (mut regs, memory) = thumb(bytes, 0x1000);
+        regs.r[0] = 0;
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1002, true));
+    }
+
+    #[test]
+    fn thumb_narrow_instruction_at_end_of_memory_region() {
+        let bytes = asm_bytes!(thumb, "movs r0, r0");
+        let (regs, memory) = thumb(bytes, 0x1000);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1002, true));
     }
 
     // ARM PC-writing instructions
@@ -425,7 +464,51 @@ mod tests {
         let (mut regs, memory) = arm(bytes, 0x1000);
         regs.r[0] = 0xfffffff0;
 
-        assert_eq!(next_pc(&regs, &memory).unwrap(), (0xc, false));
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0xe, true));
+    }
+
+    #[test]
+    fn arm_adr_pc_subtracts_immediate() {
+        let bytes: &[u8] = &[0x04, 0xf0, 0x4f, 0xe2];
+        let (regs, memory) = arm(bytes, 0x1000);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1004, false));
+    }
+
+    #[test]
+    fn arm_adr_pc_adds_immediate() {
+        let bytes: &[u8] = &[0x04, 0xf0, 0x8f, 0xe2];
+        let (regs, memory) = arm(bytes, 0x1000);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x100c, false));
+    }
+
+    #[test]
+    fn arm_movs_pc_restores_thumb_state_from_spsr() {
+        let bytes = asm_bytes!(arm, "movs pc, lr");
+        let (mut regs, memory) = arm(bytes, 0x1000);
+        regs.lr = 0x1237;
+        regs.spsr = 1 << 5;
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1236, true));
+    }
+
+    #[test]
+    fn arm_mov_pc_shifted_register() {
+        let bytes = asm_bytes!(arm, "mov pc, r0, lsl #2");
+        let (mut regs, memory) = arm(bytes, 0x1000);
+        regs.r[0] = 0x1234;
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x48d0, false));
+    }
+
+    #[test]
+    fn thumb_mov_pc_preserves_word_alignment_bit() {
+        let bytes = asm_bytes!(thumb, "mov pc, r0");
+        let (mut regs, memory) = thumb(bytes, 0x1002);
+        regs.r[0] = 0x1236;
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1236, true));
     }
 
     #[test]
@@ -462,6 +545,17 @@ mod tests {
     }
 
     #[test]
+    fn arm_ldr_pc_register_offset() {
+        let bytes = asm_bytes!(arm, "ldr pc, [r0, r1]");
+        let (mut regs, mut memory) = arm(bytes, 0x1000);
+        regs.r[0] = 0x2000;
+        regs.r[1] = 4;
+        memory.add(0x2004, &0x1235u32.to_le_bytes());
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1234, true));
+    }
+
+    #[test]
     fn arm_ldr_pc_memory_failure_is_reported() {
         let bytes = asm_bytes!(arm, "ldr pc, [r0]");
         let (mut regs, memory) = arm(bytes, 0x1000);
@@ -472,6 +566,35 @@ mod tests {
             next_pc(&regs, &memory),
             Err(NextPcError::MemoryRead)
         ));
+    }
+
+    #[test]
+    fn thumb_ldr_pc_literal_uses_aligned_pc() {
+        let bytes: &[u8] = &[0xdf, 0xf8, 0x04, 0xf0];
+        let (regs, mut memory) = thumb(bytes, 0x1002);
+        memory.add(0x1008, &0x2001u32.to_le_bytes());
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x2000, true));
+    }
+
+    #[test]
+    fn thumb_tbh_scales_index_by_two() {
+        let bytes: &[u8] = &[0xd0, 0xe8, 0x11, 0xf0];
+        let (mut regs, mut memory) = thumb(bytes, 0x1000);
+        regs.r[0] = 0x2000;
+        regs.r[1] = 3;
+        memory.add(0x2006, &3u16.to_le_bytes());
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x100a, true));
+    }
+
+    #[test]
+    fn thumb_itstate_controls_condition_for_pop_pc() {
+        let bytes = asm_bytes!(thumb, "pop {pc}");
+        let (mut regs, memory) = thumb(bytes, 0x1000);
+        regs.cpsr = (1 << 5) | (1 << 11);
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1002, true));
     }
 
     // ARM LDM
@@ -485,5 +608,36 @@ mod tests {
         regs.r[0] = 0x2000;
 
         assert_eq!(next_pc(&regs, &memory).unwrap(), (0x4566, true));
+    }
+
+    #[test]
+    fn arm_ldm_pc_exception_return_restores_spsr_state() {
+        let bytes: &[u8] = &[0x00, 0x80, 0xd0, 0xe8];
+        let (mut regs, mut memory) = arm(bytes, 0x1000);
+        regs.r[0] = 0x2000;
+        regs.spsr = 1 << 5;
+        memory.add(0x2000, &0x1235u32.to_le_bytes());
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1234, true));
+    }
+
+    #[test]
+    fn arm_rfe_ia_loads_target_and_cpsr_from_memory() {
+        let bytes: &[u8] = &[0x00, 0x0a, 0xb0, 0xf8];
+        let (mut regs, mut memory) = arm(bytes, 0x1000);
+        regs.r[0] = 0x2000;
+        memory.add(0x2000, &0x1237u32.to_le_bytes());
+        memory.add(0x2004, &((1u32 << 5).to_le_bytes()));
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1236, true));
+    }
+
+    #[test]
+    fn thumb_add_pc_register_with_implicit_zero_operand() {
+        let bytes: &[u8] = &[0x87, 0x44];
+        let (mut regs, memory) = thumb(bytes, 0x1000);
+        regs.r[0] = 0x1236;
+
+        assert_eq!(next_pc(&regs, &memory).unwrap(), (0x1236, true));
     }
 }

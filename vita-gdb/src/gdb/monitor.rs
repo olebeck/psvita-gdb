@@ -1,30 +1,41 @@
-use core::str::SplitAsciiWhitespace;
+use core::{ffi::CStr, str::SplitAsciiWhitespace};
 
 use gdbstub::target::ext::monitor_cmd::{ConsoleOutput, MonitorCmd};
-use vitasdk_sys::SceUID;
+use vitasdk_sys::{SceKernelProcessInfo, SceUID, ksceKernelGetProcessInfo};
 
 use crate::{
     gdb::target::VitaTarget,
-    kernel::utils::{
-        SceError, get_module_ids, get_module_info, get_process_ids, get_process_status,
-        get_process_titleid, get_thread_ids, get_thread_info, name_to_str, phys_read32,
-        phys_write32,
+    kernel::{
+        ffi::{ksceGUIDGetUIDVectorByClass, ksceKernelGetUIDMemBlockClass},
+        utils::{
+            SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
+            get_process_ids, get_process_status, get_process_titleid, get_thread_ids,
+            get_thread_info, name_to_str, phys_read32, phys_write32,
+        },
     },
     mep::{mep_read32, mep_write32},
+    sce_call,
 };
 
-fn resolve_pid_or_titleid(target: &str) -> Option<SceUID> {
-    target.parse().ok().or_else(|| {
-        get_process_ids().map_or_default(|mut pids| {
-            pids.find(|pid| get_process_titleid(*pid).is_some_and(|t| t == *target))
-        })
-    })
+fn parse_num(target: &str) -> Option<u32> {
+    let target = target.trim();
+    if let Some(hex) = target
+        .strip_prefix("0x")
+        .or_else(|| target.strip_prefix("0X"))
+    {
+        u32::from_str_radix(hex, 16).ok()
+    } else {
+        target.parse::<u32>().ok()
+    }
 }
 
-fn parse_num(s: &str) -> Option<u32> {
-    match s.strip_prefix("0x") {
-        Some(s) => u32::from_str_radix(s, 16).ok(),
-        None => s.parse().ok(),
+fn resolve_pid_or_titleid(target: &str) -> Option<SceUID> {
+    if let Some(pid) = parse_num(target) {
+        Some(pid as SceUID)
+    } else {
+        get_process_ids().map_or_default(|mut pids| {
+            pids.find(|pid| get_process_titleid(*pid).is_some_and(|t| t == target))
+        })
     }
 }
 
@@ -48,7 +59,6 @@ impl MonitorCmd for VitaTarget {
             "ps" => self.cmd_ls_process(out),
             "ls" => self.cmd_ls(&mut args, out),
             "info" => self.cmd_info(&mut args, out),
-            "nid" => self.cmd_lookup_nid(&mut args, out),
             "peek" => self.cmd_peek(&mut args, out),
             "poke" => self.cmd_poke(&mut args, out),
             _ => self.cmd_help(&mut args, out),
@@ -67,6 +77,10 @@ impl VitaTarget {
         gdbstub::outputln!(out, "ls process               Print a list of processes");
         gdbstub::outputln!(out, "ls thread <pid|titleid>  Print a list of threads");
         gdbstub::outputln!(out, "ls module <pid|titleid>  Print a list of modules");
+        gdbstub::outputln!(out, "ls memblock              Print a list of memblocks");
+        gdbstub::outputln!(out, "info process [pid|titleid] Print process details");
+        gdbstub::outputln!(out, "info thread <tid>        Print thread details");
+        gdbstub::outputln!(out, "info memblock <uid>      Print memory block details");
         gdbstub::outputln!(out, "peek <addr> [S]          Peek a physical address");
         gdbstub::outputln!(out, "poke <addr> <value> [S]  Poke a physical address");
         Ok(())
@@ -85,7 +99,7 @@ impl VitaTarget {
 
         gdbstub::output!(out, "pid  ");
         if let Some(pid) = d.pid {
-            gdbstub::outputln!(out, "{pid}");
+            gdbstub::outputln!(out, "0x{pid:x}");
         } else {
             gdbstub::outputln!(out, "(none)");
         }
@@ -113,8 +127,9 @@ impl VitaTarget {
             Some("process") => self.cmd_ls_process(out),
             Some("thread") => self.cmd_ls_thread(args, out),
             Some("module") => self.cmd_ls_module(args, out),
+            Some("memblock") => self.cmd_ls_memblock(out),
             _ => {
-                gdbstub::outputln!(out, "usage: ls <process|thread|module> [pid]");
+                gdbstub::outputln!(out, "usage: ls <process | thread | module | memblock>");
                 Ok(())
             }
         }
@@ -129,15 +144,55 @@ impl VitaTarget {
             Ok(pids) => pids,
         };
         for pid in pids {
-            gdbstub::output!(out, "{pid}");
+            gdbstub::output!(out, "0x{pid:x}");
             if let Some(titleid) = get_process_titleid(pid) {
                 gdbstub::output!(out, "  {titleid}");
             } else {
                 gdbstub::output!(out, "  unknown");
             }
-            let status = get_process_status(pid)?;
-            gdbstub::output!(out, "  status 0x{status:x}");
+            match get_process_status(pid) {
+                Ok(status) => {
+                    gdbstub::output!(out, "  status 0x{status:x}");
+                }
+                Err(err) => {
+                    gdbstub::output!(out, "  status {err}");
+                }
+            }
             gdbstub::outputln!(out, "");
+        }
+        Ok(())
+    }
+
+    fn cmd_ls_memblock(&mut self, mut out: ConsoleOutput<'_>) -> Result<(), SceError> {
+        let uids = match get_memblock_ids() {
+            Err(err) => {
+                gdbstub::outputln!(out, "ls memblock: lookup {err}");
+                return Ok(());
+            }
+            Ok(pids) => pids,
+        };
+        for uid in uids {
+            let info = match get_memblock_info(uid) {
+                Ok(info) => info,
+                Err(err) => {
+                    gdbstub::outputln!(out, "0x{uid:<9x} (get info {err})");
+                    continue;
+                }
+            };
+            gdbstub::output!(out, "0x{uid:<9x} ");
+            if info.core_info.name.is_null() {
+                gdbstub::output!(out, "<unnamed>");
+            } else {
+                let name = unsafe { CStr::from_ptr(info.core_info.name) };
+                gdbstub::output!(out, "{name:<32?}");
+            }
+            gdbstub::outputln!(
+                out,
+                " type=0x{:x} base=0x{:x} size=0x{:x}",
+                info.core_info.type_,
+                info.core_info.mapped_base as u32,
+                info.core_info.mapped_size
+            );
         }
         Ok(())
     }
@@ -163,7 +218,7 @@ impl VitaTarget {
         let thread_ids = match get_thread_ids(pid) {
             Ok(tids) => tids,
             Err(err) => {
-                gdbstub::outputln!(out, "ls thread: pid={pid} {err}");
+                gdbstub::outputln!(out, "ls thread: pid=0x{pid:x} {err}");
                 return Ok(());
             }
         };
@@ -171,13 +226,18 @@ impl VitaTarget {
             let info = match get_thread_info(tid) {
                 Ok(info) => info,
                 Err(err) => {
-                    gdbstub::outputln!(out, "tid={tid}  (get info {err})");
+                    gdbstub::outputln!(out, "tid=0x{tid:x}  (get info {err})");
                     continue;
                 }
             };
             let name = name_to_str(info.name.as_slice());
-            gdbstub::output!(out, "  {tid:<9} {:<32}", name);
-            gdbstub::outputln!(out, "prio {} status 0x{:x}", info.initPriority, info.status);
+            gdbstub::output!(out, "  0x{tid:<9x} {:<32}", name);
+            gdbstub::outputln!(
+                out,
+                "prio {:<3} status 0x{:x}",
+                info.initPriority,
+                info.status
+            );
         }
         Ok(())
     }
@@ -205,14 +265,14 @@ impl VitaTarget {
             let info = match get_module_info(pid, modid) {
                 Ok(info) => info,
                 Err(err) => {
-                    gdbstub::outputln!(out, "modid={modid}  (get info {err})");
+                    gdbstub::outputln!(out, "modid=0x{modid:x}  (get info {err})");
                     continue;
                 }
             };
             let name = name_to_str(info.module_name.as_slice());
             let path = name_to_str(info.path.as_slice());
-            gdbstub::output!(out, "{modid:<9} {:<32}", name);
-            gdbstub::outputln!(out, " state=0x{:x} path={}", info.state, path);
+            gdbstub::output!(out, "0x{modid:<9x} {:<32}", name);
+            gdbstub::outputln!(out, " state=0x{:x} {}", info.state, path);
             if false {
                 for seg in &info.segments {
                     if seg.size == 0 {
@@ -238,40 +298,140 @@ impl VitaTarget {
         mut out: ConsoleOutput<'_>,
     ) -> Result<(), SceError> {
         match args.next() {
-            Some("process") => self.cmd_ls_process(out),
-            Some("thread") => self.cmd_ls_thread(args, out),
+            Some("process") => self.cmd_info_process(args, out),
+            Some("thread") => self.cmd_info_thread(args, out),
+            Some("memblock") => self.cmd_info_memblock(args, out),
             _ => {
-                gdbstub::outputln!(out, "usage: ls <process|thread> [pid]");
+                gdbstub::outputln!(out, "usage: info <process|thread|memblock> [id]");
                 Ok(())
             }
         }
     }
 
-    fn cmd_lookup_nid(
+    fn cmd_info_process(
         &mut self,
         args: &mut SplitAsciiWhitespace<'_>,
         mut out: ConsoleOutput<'_>,
     ) -> Result<(), SceError> {
-        let Some(nid_str) = args.next() else {
-            gdbstub::outputln!(out, "usage: nid <func_nid>");
-            return Ok(());
-        };
-        let Some(nid) = parse_num(nid_str) else {
-            gdbstub::outputln!(out, "nid: '{nid_str}' is not a valid");
+        let Some(pid) = self.pid_arg(args.next()) else {
+            gdbstub::outputln!(out, "usage: info process [pid|titleid]");
+            gdbstub::outputln!(out, "info process: argument is not a pid or titleid");
             return Ok(());
         };
 
-        let addr = self.lookup_nid(nid);
-        match addr {
-            Some(addr) => gdbstub::outputln!(out, "0x{addr:x}"),
-            None => gdbstub::outputln!(out, "not found"),
+        let mut info: SceKernelProcessInfo = unsafe { core::mem::zeroed() };
+        info.size = size_of::<SceKernelProcessInfo>() as _;
+        if let Err(err) = sce_call!(ksceKernelGetProcessInfo(pid, &mut info)) {
+            gdbstub::outputln!(out, "info process: pid=0x{pid:x} {err}",);
+            return Ok(());
+        }
+
+        gdbstub::outputln!(out, "pid       0x{:x}", info.pid);
+        gdbstub::outputln!(out, "ppid      0x{:x}", info.ppid);
+        if let Some(titleid) = get_process_titleid(pid) {
+            gdbstub::outputln!(out, "titleid   {titleid}");
+        }
+        match get_process_status(pid) {
+            Ok(status) => gdbstub::outputln!(out, "status    0x{status:x}"),
+            Err(err) => gdbstub::outputln!(out, "status    {err}"),
         }
         Ok(())
     }
 
-    fn lookup_nid(&mut self, _nid: u32) -> Option<u32> {
-        // TODO
-        None
+    fn cmd_info_thread(
+        &mut self,
+        args: &mut SplitAsciiWhitespace<'_>,
+        mut out: ConsoleOutput<'_>,
+    ) -> Result<(), SceError> {
+        let Some(tid) = args.next().and_then(parse_num).map(|tid| tid as SceUID) else {
+            gdbstub::outputln!(out, "usage: info thread <tid>");
+            return Ok(());
+        };
+        let info = match get_thread_info(tid) {
+            Ok(info) => info,
+            Err(err) => {
+                gdbstub::outputln!(out, "info thread: tid=0x{tid:x} {err}");
+                return Ok(());
+            }
+        };
+
+        gdbstub::outputln!(out, "tid       0x{tid:x}");
+        gdbstub::outputln!(out, "pid       0x{:x}", info.processId);
+        gdbstub::outputln!(out, "name      {}", name_to_str(info.name.as_slice()));
+        gdbstub::outputln!(out, "status    0x{:x}", info.status);
+        gdbstub::outputln!(out, "attr      0x{:x}", info.attr);
+        match info.entry {
+            Some(entry) => gdbstub::outputln!(out, "entry     0x{:x}", entry as usize as u32),
+            None => gdbstub::outputln!(out, "entry     <none>"),
+        }
+        gdbstub::outputln!(out, "stack      0x{:x}", info.stack as u32);
+        gdbstub::outputln!(out, "stack size 0x{:x}", info.stackSize);
+        gdbstub::outputln!(
+            out,
+            "priority  initial={} current={}",
+            info.initPriority,
+            info.currentPriority
+        );
+        gdbstub::outputln!(
+            out,
+            "cpu       current={} affinity=0x{:x}",
+            info.currentCpuId,
+            info.currentCpuAffinityMask
+        );
+        gdbstub::outputln!(
+            out,
+            "wait      type=0x{:x} id={}",
+            info.waitType,
+            info.waitId
+        );
+        gdbstub::outputln!(out, "exit status {}", info.exitStatus);
+        Ok(())
+    }
+
+    fn cmd_info_memblock(
+        &mut self,
+        args: &mut SplitAsciiWhitespace<'_>,
+        mut out: ConsoleOutput<'_>,
+    ) -> Result<(), SceError> {
+        let Some(uid) = args.next().and_then(parse_num).map(|uid| uid as SceUID) else {
+            gdbstub::outputln!(out, "usage: info memblock <uid>");
+            return Ok(());
+        };
+        let info = match get_memblock_info(uid) {
+            Ok(info) => info,
+            Err(err) => {
+                gdbstub::outputln!(out, "info memblock: uid=0x{uid:x} {err}");
+                return Ok(());
+            }
+        };
+
+        gdbstub::outputln!(out, "uid        0x{uid:x}");
+        if info.core_info.name.is_null() {
+            gdbstub::outputln!(out, "name       <unnamed>");
+        } else {
+            let name = unsafe { CStr::from_ptr(info.core_info.name) };
+            gdbstub::outputln!(out, "name       {name:<32?}",);
+        }
+        gdbstub::outputln!(out, "type       0x{:x}", info.core_info.type_);
+        gdbstub::outputln!(
+            out,
+            "mapping    base=0x{:x} size=0x{:x} allocated=0x{:x}",
+            info.core_info.mapped_base as u32,
+            info.core_info.mapped_size,
+            info.core_info.alloc_map_size
+        );
+        gdbstub::outputln!(out, "partition  {}", info.core_info.partition_guid);
+        for i in 0..(info.physical_range_count_written as usize).min(info.physical_addresses.len())
+        {
+            gdbstub::outputln!(
+                out,
+                "physical[{}] base=0x{:x} size=0x{:x}",
+                i,
+                info.physical_addresses[i] as u32,
+                info.physical_sizes[i]
+            );
+        }
+        Ok(())
     }
 
     fn cmd_peek(

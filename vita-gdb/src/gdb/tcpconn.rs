@@ -88,8 +88,18 @@ impl TcpConn {
         let Some(state) = acquire_state() else {
             return Err(SceError::new(-1, "acquire_state"));
         };
-        let thread = JoinableThread::create(c"net_rx", 0x40, 0x1000)?;
-        thread.start(net_rx_thread, (socket.raw(), evflag, state))?;
+        let thread = match JoinableThread::create(c"net_rx", 0x40, 0x1000) {
+            Ok(thread) => thread,
+            Err(err) => {
+                release_state(state);
+                return Err(err);
+            }
+        };
+        if let Err(err) = thread.start(net_rx_thread, (socket.raw(), evflag, state)) {
+            let _ = thread.delete();
+            release_state(state);
+            return Err(err);
+        }
         Ok(Self {
             socket,
             evflag,
@@ -125,6 +135,9 @@ impl TcpConn {
     fn flush_write_buffer(&mut self) -> Result<(), SceError> {
         while self.write_len > 0 {
             let n = self.socket.send(&self.write_buffer[..self.write_len])?;
+            if n == 0 {
+                return Err(SceError::new(-1, "send returned 0"));
+            }
             if n < self.write_len {
                 self.write_buffer.copy_within(n..self.write_len, 0);
                 self.write_len -= n;
@@ -202,6 +215,7 @@ fn net_rx_thread(arg: NetRxArg) {
             Err(err) => {
                 println!("net_rx_thread: {err}");
                 unsafe { *state.err.get() = Some(err) };
+                state.closed.store(true, Ordering::Release);
                 let _ = evflag.set(EV_WAKE_WORKER);
                 return;
             }

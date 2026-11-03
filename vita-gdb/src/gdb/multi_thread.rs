@@ -98,6 +98,7 @@ impl MultiThreadBase for VitaTarget {
         regs.lr = th_regs.lr;
         regs.pc = th_regs.pc;
         regs.cpsr = th_regs.cpsr;
+        //TODO regs.spsr = th_regs.spsr;
         regs.fpscr = th_regs.fpscr;
 
         regs.d = [0x7ff8dead7f80deadu64; 32];
@@ -162,6 +163,7 @@ impl MultiThreadBase for VitaTarget {
             return Err(TargetError::NonFatal);
         }
 
+        /* breaks
         if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(
             tid,
             &regs.d as *const _ as _
@@ -169,6 +171,7 @@ impl MultiThreadBase for VitaTarget {
             println!("write_registers {err} tid={tid}");
             return Err(TargetError::NonFatal);
         }
+        */
 
         Ok(())
     }
@@ -180,8 +183,7 @@ impl MultiThreadBase for VitaTarget {
         _tid: Tid,
     ) -> TargetResult<usize, Self> {
         let Some(pid) = self.pid() else {
-            data.fill(0);
-            return Ok(data.len());
+            return Err(TargetError::NonFatal);
         };
 
         if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
@@ -198,7 +200,7 @@ impl MultiThreadBase for VitaTarget {
 
     fn write_addrs(&mut self, start_addr: u32, data: &[u8], _tid: Tid) -> TargetResult<(), Self> {
         let Some(pid) = self.pid() else {
-            return Ok(());
+            return Err(TargetError::NonFatal);
         };
         if let Err(err) = write_user_text(pid, start_addr, data) {
             println!("write_addrs {err} addr=0x{start_addr:x}");
@@ -244,7 +246,7 @@ impl MultiThreadBase for VitaTarget {
 
 impl MemReader for VitaTarget {
     fn read(&self, addr: usize, buf: &mut [u8]) -> Option<()> {
-        let pid = self.pid().unwrap();
+        let pid = self.pid()?;
         if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
             pid,
             buf.as_mut_ptr() as _,
@@ -265,6 +267,7 @@ fn arm_reg_context(regs: &Armv7Regs) -> RegContext {
         lr: regs.lr,
         pc: regs.pc,
         cpsr: regs.cpsr,
+        spsr: regs.spsr,
     }
 }
 
@@ -348,7 +351,6 @@ impl MultiThreadResume for VitaTarget {
                 status = STATUS_RUNNING;
             }
 
-            println!("ksceKernelChangeThreadSuspendStatus({tid}, {status})");
             if let Err(err) = sce_call!(ksceKernelChangeThreadSuspendStatus(tid, status)) {
                 println!("{err} tid={tid}");
             }
@@ -379,10 +381,12 @@ impl MultiThreadResume for VitaTarget {
         Ok(())
     }
 
+    #[inline(always)]
     fn support_single_step(&mut self) -> Option<MultiThreadSingleStepOps<'_, Self>> {
         Some(self)
     }
 
+    #[inline(always)]
     fn support_scheduler_locking(&mut self) -> Option<MultiThreadSchedulerLockingOps<'_, Self>> {
         Some(self)
     }
