@@ -8,12 +8,11 @@ use:
 - copy vita-gdb.skprx to ur0|ux0:/tai/
 - add to kernel section in config
 - `arm-vita-eabi-gdb -ex "target extended-remote <vitaip>:31337"` to connect to the stub
-- use `mon ps` to list processese
+- use `mon ps` to list processes
 - `attach <pid>` to attach
-- `set remote exec-file <TITLEID>` and then `run` to run an app (this times out sometimes gdb seems to have unrealistic standards for how fast a process can launch)
+- `set remote exec-file <TITLEID>` and then `run` to launch an app
 
 todo:
-- stepping may be broken which also breaks sw breakpoints maybe?
 - neon registers dont read correctly
 - vfp (floating point) exceptions arent handled yet
 - enabling hardware breakpoints doesnt work yet

@@ -4,9 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+default = ["exarmo"]
 std = []
+exarmo = ["dep:exarmo-aarch32"]
+yaxpeax = ["dep:yaxpeax-arm", "dep:yaxpeax-arch"]
 
 [dependencies]
+yaxpeax-arm = { git = "https://github.com/olebeck/yaxpeax-arm", default-features = false, optional = true }
+yaxpeax-arch = { version = "0.3.2", default-features = false, optional = true }
+exarmo-aarch32 = { version = "0.4.0", default-features = false, optional = true }
+
+[dev-dependencies]
 asm-rs-macros = { version = "0.2.0", default-features = false }
-yaxpeax-arch = { version = "0.3.2", default-features = false }
-yaxpeax-arm = { version = "0.5.0", default-features = false }

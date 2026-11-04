@@ -160,7 +160,7 @@ unsafe extern "C" {
 }
 
 libstub_ver!(SceSysmemForKernel, 0x63A519E5, 0x02451F0F,
-    (0x30931572, 0x2995558D, ksceKernelCopyToUserProcTextDomain(pid: SceUID, dst: *mut c_void, src: *const c_void, len: usize) -> i32),
+    //(0x30931572, 0x2995558D, ksceKernelCopyToUserProcTextDomain(pid: SceUID, dst: *mut c_void, src: *const c_void, len: usize) -> i32),
     (0x67BAD5B4, 0x5EF1DAAF, ksceKernelCopyToUserTextDomain(dst: *mut c_void, src: *const c_void, len: usize) -> i32),
     (0xEC7D36EF, 0x52137FA3, ksceGUIDGetUIDVectorByClass(cls: *const SceClass, vis_level: i32, vector: *mut SceUID, num: u32, ret_num: *mut u32) -> i32),
     (0xAF729575, 0x86681B64, ksceKernelGetUIDMemBlockClass() -> *mut SceClass)

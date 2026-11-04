@@ -14,6 +14,9 @@ release:
     cd {{project}} && cargo +nightly build -Zbuild-std=core --release
     @just self release
 
+bloat:
+    cd {{project}} && cargo +nightly bloat -Zbuild-std=core
+
 clean:
     cargo clean
 

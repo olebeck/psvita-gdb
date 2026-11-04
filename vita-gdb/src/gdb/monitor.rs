@@ -5,13 +5,10 @@ use vitasdk_sys::{SceKernelProcessInfo, SceUID, ksceKernelGetProcessInfo};
 
 use crate::{
     gdb::target::VitaTarget,
-    kernel::{
-        ffi::{ksceGUIDGetUIDVectorByClass, ksceKernelGetUIDMemBlockClass},
-        utils::{
-            SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
-            get_process_ids, get_process_status, get_process_titleid, get_thread_ids,
-            get_thread_info, name_to_str, phys_read32, phys_write32,
-        },
+    kernel::utils::{
+        SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
+        get_process_ids, get_process_status, get_process_titleid, get_thread_ids, get_thread_info,
+        name_to_str, phys_read32, phys_write32,
     },
     mep::{mep_read32, mep_write32},
     sce_call,
