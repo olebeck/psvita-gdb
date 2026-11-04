@@ -21,7 +21,7 @@ jobs:
           ./bootstrap-vitasdk.sh
           echo "VITASDK=/usr/local/vitasdk" >> "$GITHUB_ENV"
           echo "/usr/local/vitasdk/bin" >> "$GITHUB_PATH"
-          vdpm pacman -S taihen
+          vdpm pacman -S taihen --noconfirm
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
