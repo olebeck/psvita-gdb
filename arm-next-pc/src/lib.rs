@@ -1,20 +1,13 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(all(feature = "exarmo", feature = "yaxpeax"))]
-compile_error!("exarmo and yaxpeax are mutex");
-
-#[cfg(not(any(feature = "exarmo", feature = "yaxpeax")))]
-compile_error!("exarmo or yaxpeax must be enabled");
+#[cfg(not(any(feature = "exarmo")))]
+compile_error!("exarmo must be enabled");
 
 #[cfg(feature = "exarmo")]
 mod next_pc_exarmo;
-#[cfg(feature = "yaxpeax")]
-mod next_pc_yaxpeax;
 
 #[cfg(feature = "exarmo")]
 pub use next_pc_exarmo::next_pc;
-#[cfg(feature = "yaxpeax")]
-pub use next_pc_yaxpeax::next_pc;
 
 #[cfg(feature = "std")]
 mod tests;
