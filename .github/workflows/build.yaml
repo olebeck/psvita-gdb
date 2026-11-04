@@ -19,6 +19,8 @@ jobs:
           git clone https://github.com/vitasdk/vdpm
           cd vdpm
           ./bootstrap-vitasdk.sh
+          export VITASDK=/usr/local/vitasdk
+          export PATH=$PATH:$VITASDK/bin
           echo "VITASDK=/usr/local/vitasdk" >> "$GITHUB_ENV"
           echo "/usr/local/vitasdk/bin" >> "$GITHUB_PATH"
           vdpm pacman -S taihen --noconfirm
