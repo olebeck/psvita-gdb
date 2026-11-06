@@ -29,7 +29,7 @@ static SESSION_POOL: [GdbSessionInner; MAX_SESSIONS] =
     [const { GdbSessionInner::uninit() }; MAX_SESSIONS];
 static SESSION_ALLOC_LOCK: Spinlock<()> = Spinlock::new(());
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ExceptionKind {
     Dabt,
     Pabt,

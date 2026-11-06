@@ -60,6 +60,26 @@ pub fn mep_read32(addr: u32) -> Result<u32, SceError> {
     Ok(value)
 }
 
+pub fn mep_read(addr: u32, buf: &mut [u32]) -> Result<(), SceError> {
+    fud_bridge_exec(
+        0x00807262,
+        &[FUD_COMMS_PA + 0x10, addr, (buf.len() * 4) as _],
+    )?;
+    unsafe {
+        let p = FUD_COMMS.unwrap().1.add(0x10).cast::<u32>();
+        core::ptr::copy(p, buf.as_mut_ptr(), buf.len());
+    }
+    Ok(())
+}
+
+pub fn mep_dump(addr: u32, cb: impl FnOnce(u32, &[u32])) -> Result<(), SceError> {
+    let base = addr & !0xfff;
+    let mut buf = [0u32; 0x1000 / 4];
+    mep_read(base, &mut buf)?;
+    cb(base, &buf);
+    Ok(())
+}
+
 pub fn spl_exec(code: &[u8], arg: u32) -> Result<u32, SceError> {
     match unsafe { spl_exec_code(code.as_ptr() as _, code.len(), arg, true) } {
         1 => Err(SceError::new(-1, "spl_exec_code")),

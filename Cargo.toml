@@ -3,6 +3,7 @@ members = [
     "arm-next-pc",
     "vita-gdb"
 ]
+exclude = ["gdbstub"]
 resolver = "2"
 
 [profile.dev]

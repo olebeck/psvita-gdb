@@ -9,7 +9,6 @@ use gdbstub::{
             base::{
                 multithread::{
                     MultiThreadBase, MultiThreadResume, MultiThreadResumeOps,
-                    MultiThreadSchedulerLocking, MultiThreadSchedulerLockingOps,
                     MultiThreadSingleStep, MultiThreadSingleStepOps,
                 },
                 single_register_access::{SingleRegisterAccess, SingleRegisterAccessOps},
@@ -239,7 +238,7 @@ impl MultiThreadBase for VitaTarget {
     }
 
     #[inline(always)]
-    fn support_single_register_access(&mut self) -> Option<SingleRegisterAccessOps<'_, Tid, Self>> {
+    fn support_single_register_access(&mut self) -> Option<SingleRegisterAccessOps<'_, Self>> {
         Some(self)
     }
 }
@@ -294,7 +293,6 @@ impl MultiThreadResume for VitaTarget {
         for tid in self.continue_actions.as_ref() {
             println!("continue {}", *tid)
         }
-        println!("scheduler_lock {}", self.scheduler_lock);
 
         const STATUS_SUSPEND: i32 = 1;
         const STATUS_RUNNING: i32 = 2;
@@ -302,7 +300,7 @@ impl MultiThreadResume for VitaTarget {
         for tid in get_thread_ids(pid)? {
             let mut status = STATUS_RUNNING;
 
-            if self.scheduler_lock {
+            if self.continue_actions.len() > 0 {
                 status = STATUS_SUSPEND;
             }
 
@@ -362,32 +360,28 @@ impl MultiThreadResume for VitaTarget {
     fn clear_resume_actions(&mut self) -> Result<(), Self::Error> {
         self.step_action = None;
         self.continue_actions.clear();
-        self.scheduler_lock = false;
         Ok(())
     }
 
     fn set_resume_action_continue(
         &mut self,
-        tid: Tid,
+        tid: Option<Tid>,
         signal: Option<Signal>,
     ) -> Result<(), Self::Error> {
         if signal.is_some() {
             return Err(SceError::new(-1, "set_resume_action_continue"));
         }
-        let tid = tid.get() as SceUID;
-        if let Err(_) = self.continue_actions.try_push(tid) {
-            return Err(SceError::new(-1, "continue_actions full"));
+        if let Some(tid) = tid {
+            let tid = tid.get() as SceUID;
+            if self.continue_actions.try_push(tid).is_err() {
+                return Err(SceError::new(-1, "continue_actions full"));
+            }
         }
         Ok(())
     }
 
     #[inline(always)]
     fn support_single_step(&mut self) -> Option<MultiThreadSingleStepOps<'_, Self>> {
-        Some(self)
-    }
-
-    #[inline(always)]
-    fn support_scheduler_locking(&mut self) -> Option<MultiThreadSchedulerLockingOps<'_, Self>> {
         Some(self)
     }
 }
@@ -407,13 +401,6 @@ impl MultiThreadSingleStep for VitaTarget {
     }
 }
 
-impl MultiThreadSchedulerLocking for VitaTarget {
-    fn set_resume_action_scheduler_lock(&mut self) -> Result<(), Self::Error> {
-        self.scheduler_lock = true;
-        Ok(())
-    }
-}
-
 impl ThreadExtraInfo for VitaTarget {
     fn thread_extra_info(&self, tid: Tid, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if self.session.is_none() {
@@ -427,7 +414,7 @@ impl ThreadExtraInfo for VitaTarget {
     }
 }
 
-impl SingleRegisterAccess<Tid> for VitaTarget {
+impl SingleRegisterAccess for VitaTarget {
     fn read_register(
         &mut self,
         tid: Tid,

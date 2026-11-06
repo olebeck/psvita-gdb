@@ -1,24 +1,15 @@
 use arrayvec::ArrayVec;
-use core::{ffi::CStr, fmt::Write, mem::zeroed, ptr::null_mut};
+use core::{ffi::CStr, fmt::{Display, Write}, mem::zeroed, ptr::null_mut};
 use gdbstub::{
-    common::Pid,
-    target::{
-        Target, TargetError, TargetResult,
-        ext::{
-            base::BaseOps,
-            breakpoints::{
+    common::{Pid, Tid}, target::{
+        Target, TargetError, TargetResult, ext::{
+            base::BaseOps, breakpoints::{
                 Breakpoints, BreakpointsOps, HwBreakpoint, HwBreakpointOps, HwWatchpoint,
                 HwWatchpointOps, SwBreakpoint, SwBreakpointOps, WatchKind,
-            },
-            exec_file::{ExecFile, ExecFileOps},
-            extended_mode::{
+            }, exec_file::{ExecFile, ExecFileOps}, extended_mode::{
                 Args, AttachKind, CurrentActivePid, CurrentActivePidOps, ExtendedMode,
                 ExtendedModeOps, ShouldTerminate,
-            },
-            libraries::{Libraries, LibrariesOps},
-            monitor_cmd::MonitorCmdOps,
-            process_info::{ProcessInfo, ProcessInfoOps, ProcessInfoResponse},
-            section_offsets::{Offsets, SectionOffsets, SectionOffsetsOps},
+            }, libraries::{Libraries, LibrariesOps}, monitor_cmd::MonitorCmdOps, process_info::{ProcessInfo, ProcessInfoOps, ProcessInfoResponse}, section_offsets::{Offsets, SectionOffsets, SectionOffsetsOps}, threads::{Threads, ThreadsOps},
         },
     },
 };
@@ -34,7 +25,7 @@ use crate::{
         thread::delay_thread,
         utils::{
             ArgvWriter, SceError, StreamWriter, get_module_ids, get_module_info, get_process_ids,
-            get_process_status, halt_process, resume_process,
+            get_process_status, get_thread_ids, get_thread_info, halt_process, resume_process,
         },
     },
     println, sce_call,
@@ -72,7 +63,6 @@ pub struct VitaTarget {
     pub(crate) attach_kind: AttachKind,
     pub(crate) step_action: Option<SceUID>,
     pub(crate) continue_actions: ArrayVec<SceUID, 64>,
-    pub(crate) scheduler_lock: bool,
 }
 
 impl VitaTarget {
@@ -84,7 +74,6 @@ impl VitaTarget {
             attach_kind: AttachKind::Attach,
             step_action: None,
             continue_actions: ArrayVec::new(),
-            scheduler_lock: false,
         }
     }
 
@@ -130,9 +119,10 @@ impl Drop for VitaTarget {
 impl Target for VitaTarget {
     type Arch = Armv7;
     type Error = SceError;
+    type Tid = Tid;
 
     #[inline(always)]
-    fn base_ops(&mut self) -> BaseOps<'_, Self::Arch, Self::Error> {
+    fn base_ops(&mut self) -> BaseOps<'_, Self::Arch, Self::Error, Self::Tid> {
         BaseOps::MultiThread(self)
     }
 
@@ -168,6 +158,11 @@ impl Target for VitaTarget {
 
     #[inline(always)]
     fn support_section_offsets(&mut self) -> Option<SectionOffsetsOps<'_, Self>> {
+        Some(self)
+    }
+
+    #[inline(always)]
+    fn support_threads(&mut self) -> Option<ThreadsOps<'_, Self>> {
         Some(self)
     }
 }
@@ -354,6 +349,60 @@ impl Libraries for VitaTarget {
         let _ = write!(writer, "</library-list>");
         Ok(writer.written())
     }
+}
+
+impl Threads for VitaTarget {
+    fn get_threads(
+        &self,
+        offset: u64,
+        _length: usize,
+        buf: &mut [u8],
+    ) -> TargetResult<usize, Self> {
+        let Some(pid) = self.pid() else {
+            return Ok(0);
+        };
+
+        let tids = match get_thread_ids(pid) {
+            Ok(tids) => tids,
+            Err(err) => {
+                println!("{err} pid={pid}");
+                return Err(TargetError::NonFatal);
+            }
+        };
+
+        let mut writer = StreamWriter::new(buf, offset as _);
+        let _ = write!(writer, "<?xml version=\"1.0\"?><threads>");
+        for tid in tids {
+            let info = match get_thread_info(tid) {
+                Ok(info) => info,
+                Err(err) => {
+                    println!("get_thread_info(0x{:x}): {}", tid, err);
+                    continue;
+                }
+            };
+            let Ok(name) = unsafe { CStr::from_ptr(info.name.as_ptr() as _) }.to_str() else {
+                continue;
+            };
+            let core = if info.currentCpuId >= 0 { info.currentCpuId } else { info.lastExecutedCpuId };
+            let _ = write!(
+                writer,
+                "<thread id=\"{}\" core=\"{core}\" name=\"{name}\" id_str=\"{name}\"></thread>",
+                format_tid(unsafe { Tid::new_unchecked(tid as _) })
+            );
+        }
+        let _ = write!(writer, "</threads>");
+        Ok(writer.written())
+    }
+}
+
+fn format_tid(tid: Tid) -> impl Display {
+    struct TidDisplay(Tid);
+    impl Display for TidDisplay {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "{:08x}", self.0.get())
+        }
+    }
+    TidDisplay(tid)
 }
 
 impl SectionOffsets for VitaTarget {

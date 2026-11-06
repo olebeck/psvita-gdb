@@ -354,6 +354,15 @@ pub fn phys_write32(addr: u32, value: u32) -> Result<(), SceError> {
     Ok(())
 }
 
+pub fn phys_dump(addr: u32, cb: impl FnOnce(u32, &[u32])) -> Result<(), SceError> {
+    let base = addr & !0xfff;
+    let (uid, p) = map_paddr(c"tmp", base, 0x1000)?;
+    let words = unsafe { core::slice::from_raw_parts(p as *const u32, 0x1000 / 4) };
+    cb(base, words);
+    sce_call!(ksceKernelFreeMemBlock(uid))?;
+    Ok(())
+}
+
 pub fn name_to_str(name: &[i8]) -> &str {
     let name_len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
     unsafe {

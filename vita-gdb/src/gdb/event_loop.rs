@@ -1,8 +1,5 @@
 use gdbstub::common::{Signal, Tid};
-use gdbstub::stub::{
-    DisconnectReason, GdbStub, GdbStubError, MultiThreadStopReason,
-    state_machine::GdbStubStateMachine,
-};
+use gdbstub::stub::{DisconnectReason, GdbStub, GdbStubError, state_machine::GdbStubStateMachine};
 use vitasdk_sys::SCE_EVENT_WAITCLEAR_PAT;
 
 use crate::gdb::sessions::ExceptionEvent;
@@ -22,16 +19,17 @@ pub fn run_session(
 ) -> Result<DisconnectReason, GdbStubError<SceError, SceError>> {
     let mut gdb = gdb.run_state_machine(target)?;
 
+    let mut ctrl_c = false;
     loop {
         gdb = match gdb {
             GdbStubStateMachine::Idle(mut gdb) => match next_byte(target, gdb.borrow_conn()) {
                 Ok(Incoming::Byte(byte)) => gdb.incoming_data(target, byte)?,
-                Ok(Incoming::Stop(_reason)) => {
-                    println!("eventloop: stop in idle");
-                    break Ok(DisconnectReason::Disconnect);
-                }
                 Ok(Incoming::Closed) => {
                     println!("eventloop: connection closed");
+                    break Ok(DisconnectReason::Disconnect);
+                }
+                Ok(ev) => {
+                    println!("eventloop: unexpected event {ev:?} in idle");
                     break Ok(DisconnectReason::Disconnect);
                 }
                 Err(err) => {
@@ -42,24 +40,64 @@ pub fn run_session(
 
             GdbStubStateMachine::Running(mut gdb) => {
                 println!("GdbStubStateMachine::Running");
-                match next_event_or_byte(target, gdb.borrow_conn()) {
-                    Ok(Incoming::Byte(byte)) => gdb.incoming_data(target, byte)?,
-                    Ok(Incoming::Stop(reason)) => gdb.report_stop(target, reason)?,
-                    Ok(Incoming::Closed) => {
-                        println!("eventloop: connection closed");
-                        break Ok(DisconnectReason::Disconnect);
-                    }
-                    Err(err) => {
-                        println!("eventloop: io error {err}");
-                        break Ok(DisconnectReason::Disconnect);
+                if ctrl_c {
+                    ctrl_c = false;
+                    interrupt_target(target);
+                    gdb.report_stop(target).signal(Signal::SIGINT)?
+                } else {
+                    let ev = match next_event_or_byte(target, gdb.borrow_conn()) {
+                        Ok(ev) => ev,
+                        Err(err) => {
+                            println!("eventloop: io error {err}");
+                            break Ok(DisconnectReason::Disconnect);
+                        }
+                    };
+                    match ev {
+                        Incoming::Byte(byte) => gdb.incoming_data(target, byte)?,
+
+                        Incoming::Exception(excp) => {
+                            let report = gdb.report_stop(target);
+                            match excp {
+                                ExceptionEvent::Exception { tid, kind } => {
+                                    let signal = match kind {
+                                        ExceptionKind::Dabt => Signal::SIGSEGV,
+                                        ExceptionKind::Pabt => Signal::SIGBUS,
+                                        ExceptionKind::Undef => Signal::SIGILL,
+                                    };
+                                    let tid = unsafe { Tid::new_unchecked(tid as _) };
+                                    report.signal_with_thread(signal, tid)?.done()?
+                                }
+                                ExceptionEvent::HwBreak { tid } => {
+                                    let tid = unsafe { Tid::new_unchecked(tid as _) };
+                                    report.hwbreak(tid)?.done()?
+                                }
+                                ExceptionEvent::SwBreak { tid } => {
+                                    let tid = unsafe { Tid::new_unchecked(tid as _) };
+                                    report.swbreak(tid)?.done()?
+                                }
+                                ExceptionEvent::Watch { tid, addr, kind } => {
+                                    let tid = unsafe { Tid::new_unchecked(tid as _) };
+                                    report.watch(tid, kind, addr)?.done()?
+                                }
+                            }
+                        }
+
+                        Incoming::StepDone => gdb.report_stop(target).done_step()?,
+
+                        Incoming::Exited(code) => gdb.report_stop(target).exited(code)?,
+
+                        Incoming::Closed => {
+                            println!("eventloop: connection closed");
+                            break Ok(DisconnectReason::Disconnect);
+                        }
                     }
                 }
             }
 
             GdbStubStateMachine::CtrlCInterrupt(gdb) => {
                 println!("GdbStubStateMachine::CtrlCInterrupt");
-                let reason = interrupt_target(target);
-                gdb.interrupt_handled(target, reason)?
+                ctrl_c = true;
+                gdb.interrupt_handled()
             }
 
             GdbStubStateMachine::Disconnected(gdb) => {
@@ -70,9 +108,12 @@ pub fn run_session(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 enum Incoming {
     Byte(u8),
-    Stop(MultiThreadStopReason<u32>),
+    Exception(ExceptionEvent),
+    StepDone,
+    Exited(u8),
     Closed,
 }
 
@@ -81,23 +122,20 @@ fn next_event_or_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Inc
         // has the process detached
         if target.detached {
             target.detached = false;
-            return Ok(Incoming::Stop(MultiThreadStopReason::Exited(0)));
+            return Ok(Incoming::Exited(0));
         }
 
         // was there an async event
         if let Some(session) = target.session.as_ref() {
             let inner = session.inner();
             if inner.pop_exited() {
-                return Ok(Incoming::Stop(MultiThreadStopReason::Exited(0)));
+                return Ok(Incoming::Exited(0));
             }
-            if let Some(tid) = inner.pop_step_finished() {
-                return Ok(Incoming::Stop(MultiThreadStopReason::SignalWithThread {
-                    tid: Tid::new(tid as usize).unwrap(),
-                    signal: Signal::SIGTRAP,
-                }));
+            if let Some(_tid) = inner.pop_step_finished() {
+                return Ok(Incoming::StepDone);
             }
             if let Some(ev) = inner.pop_excp() {
-                return Ok(Incoming::Stop(stop_reason_from(ev)));
+                return Ok(Incoming::Exception(ev));
             }
         };
 
@@ -121,7 +159,7 @@ fn next_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Incoming, Sc
         if let Some(session) = target.session.as_ref() {
             let inner = session.inner();
             if inner.pop_exited() {
-                return Ok(Incoming::Stop(MultiThreadStopReason::Exited(0)));
+                return Ok(Incoming::Exited(0));
             }
         }
 
@@ -140,43 +178,11 @@ fn next_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Incoming, Sc
     }
 }
 
-fn stop_reason_from(ev: ExceptionEvent) -> MultiThreadStopReason<u32> {
-    match ev {
-        ExceptionEvent::HwBreak { tid } => {
-            MultiThreadStopReason::HwBreak(Tid::new(tid as usize).unwrap())
-        }
-        ExceptionEvent::Watch { tid, addr, kind } => MultiThreadStopReason::Watch {
-            tid: Tid::new(tid as usize).unwrap(),
-            kind,
-            addr,
-        },
-        ExceptionEvent::SwBreak { tid } => {
-            MultiThreadStopReason::SwBreak(Tid::new(tid as usize).unwrap())
-        }
-        ExceptionEvent::Exception { tid, kind } => MultiThreadStopReason::SignalWithThread {
-            tid: Tid::new(tid as usize).unwrap(),
-            signal: match kind {
-                ExceptionKind::Dabt => Signal::SIGSEGV,
-                ExceptionKind::Pabt => Signal::SIGBUS,
-                ExceptionKind::Undef => Signal::SIGILL,
-            },
-        },
-    }
-}
-
-fn interrupt_target(target: &mut VitaTarget) -> Option<MultiThreadStopReason<u32>> {
+fn interrupt_target(target: &mut VitaTarget) {
     let Some(pid) = target.pid() else {
-        return Some(MultiThreadStopReason::Signal(Signal::SIGINT));
+        return;
     };
-
-    match halt_process(pid) {
-        Ok(tid) => Some(MultiThreadStopReason::SignalWithThread {
-            tid: Tid::new(tid as usize).unwrap(),
-            signal: Signal::SIGINT,
-        }),
-        Err(err) => {
-            println!("interrupt: {err}");
-            Some(MultiThreadStopReason::Signal(Signal::SIGINT))
-        }
+    if let Err(err) = halt_process(pid) {
+        println!("interrupt: {err}");
     }
 }

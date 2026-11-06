@@ -8,9 +8,9 @@ use crate::{
     kernel::utils::{
         SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
         get_process_ids, get_process_status, get_process_titleid, get_thread_ids, get_thread_info,
-        name_to_str, phys_read32, phys_write32,
+        name_to_str, phys_dump, phys_read32, phys_write32,
     },
-    mep::{mep_read32, mep_write32},
+    mep::{mep_dump, mep_read32, mep_write32},
     sce_call,
 };
 
@@ -36,6 +36,12 @@ fn resolve_pid_or_titleid(target: &str) -> Option<SceUID> {
     }
 }
 
+enum PeekType {
+    Virtual,
+    Physical,
+    Secure,
+}
+
 impl MonitorCmd for VitaTarget {
     fn handle_monitor_cmd(
         &mut self,
@@ -56,8 +62,14 @@ impl MonitorCmd for VitaTarget {
             "ps" => self.cmd_ls_process(out),
             "ls" => self.cmd_ls(&mut args, out),
             "info" => self.cmd_info(&mut args, out),
-            "peek" => self.cmd_peek(&mut args, out),
-            "poke" => self.cmd_poke(&mut args, out),
+            "peek" => self.cmd_peek(&mut args, out, PeekType::Virtual),
+            "poke" => self.cmd_poke(&mut args, out, PeekType::Virtual),
+            "peekp" => self.cmd_peek(&mut args, out, PeekType::Physical),
+            "pokep" => self.cmd_poke(&mut args, out, PeekType::Physical),
+            "peeks" => self.cmd_peek(&mut args, out, PeekType::Secure),
+            "pokes" => self.cmd_poke(&mut args, out, PeekType::Secure),
+            "hexdumpp" => self.cmd_hexdump(&mut args, out, PeekType::Physical),
+            "hexdumps" => self.cmd_hexdump(&mut args, out, PeekType::Secure),
             _ => self.cmd_help(&mut args, out),
         }
     }
@@ -268,23 +280,12 @@ impl VitaTarget {
             };
             let name = name_to_str(info.module_name.as_slice());
             let path = name_to_str(info.path.as_slice());
-            gdbstub::output!(out, "0x{modid:<9x} {:<32}", name);
-            gdbstub::outputln!(out, " state=0x{:x} {}", info.state, path);
-            if false {
-                for seg in &info.segments {
-                    if seg.size == 0 {
-                        continue;
-                    }
-                    gdbstub::outputln!(
-                        out,
-                        "  vaddr=0x{:x} size={} perms={}",
-                        seg.vaddr as u32,
-                        seg.memsz,
-                        seg.perms
-                    );
-                }
-                gdbstub::outputln!(out, "");
-            }
+            gdbstub::outputln!(
+                out,
+                "0x{modid:<9x} {:<32} state=0x{:x} {path}",
+                name,
+                info.state
+            );
         }
         Ok(())
     }
@@ -298,8 +299,9 @@ impl VitaTarget {
             Some("process") => self.cmd_info_process(args, out),
             Some("thread") => self.cmd_info_thread(args, out),
             Some("memblock") => self.cmd_info_memblock(args, out),
+            Some("module") => self.cmd_info_module(args, out),
             _ => {
-                gdbstub::outputln!(out, "usage: info <process|thread|memblock> [id]");
+                gdbstub::outputln!(out, "usage: info <process|thread|memblock|module> [id]");
                 Ok(())
             }
         }
@@ -431,13 +433,58 @@ impl VitaTarget {
         Ok(())
     }
 
-    fn cmd_peek(
+    fn cmd_info_module(
         &mut self,
         args: &mut SplitAsciiWhitespace<'_>,
         mut out: ConsoleOutput<'_>,
     ) -> Result<(), SceError> {
+        let Some(pid) = self.pid_arg(args.next()) else {
+            gdbstub::outputln!(out, "usage: info module <pid|titleid> <uid>");
+            gdbstub::outputln!(out, "info module: argument is not a pid or titleid");
+            return Ok(());
+        };
+        let Some(uid) = args.next().and_then(parse_num).map(|uid| uid as SceUID) else {
+            gdbstub::outputln!(out, "usage: info module <pid|titleid> <uid>");
+            return Ok(());
+        };
+        let info = match get_module_info(pid, uid) {
+            Ok(info) => info,
+            Err(err) => {
+                gdbstub::outputln!(out, "modid=0x{uid:x}  (get info {err})");
+                return Ok(());
+            }
+        };
+        let name = name_to_str(info.module_name.as_slice());
+        let path = name_to_str(info.path.as_slice());
+        gdbstub::outputln!(out, "0x{uid:<9x} {:<32}", name);
+        gdbstub::outputln!(out, "  {path}");
+        gdbstub::outputln!(out, "  state=0x{:x}", info.state);
+
+        let text = &info.segments[0];
+        gdbstub::outputln!(
+            out,
+            "  text=0x{:08x} size=0x{:x}",
+            text.vaddr as u32,
+            text.memsz,
+        );
+        let data = &info.segments[1];
+        gdbstub::outputln!(
+            out,
+            "  data=0x{:08x} size=0x{:x}",
+            data.vaddr as u32,
+            data.memsz,
+        );
+        Ok(())
+    }
+
+    fn cmd_peek(
+        &mut self,
+        args: &mut SplitAsciiWhitespace<'_>,
+        mut out: ConsoleOutput<'_>,
+        typ: PeekType,
+    ) -> Result<(), SceError> {
         let Some(addr) = args.next() else {
-            gdbstub::outputln!(out, "usage: peek <addr> [S]");
+            gdbstub::outputln!(out, "usage: peek <addr>");
             return Ok(());
         };
         let Some(addr) = parse_num(addr) else {
@@ -445,19 +492,10 @@ impl VitaTarget {
             return Ok(());
         };
 
-        let secure = match args.next() {
-            None => false,
-            Some("S") => true,
-            Some(_) => {
-                gdbstub::outputln!(out, "usage: peek <addr> [S]");
-                return Ok(());
-            }
-        };
-
-        let value = if secure {
-            mep_read32(addr)?
-        } else {
-            phys_read32(addr)?
+        let value = match typ {
+            PeekType::Virtual => unsafe { core::ptr::read_volatile(addr as *const u32) },
+            PeekType::Physical => phys_read32(addr)?,
+            PeekType::Secure => mep_read32(addr)?,
         };
         gdbstub::outputln!(out, "{value:x}");
         Ok(())
@@ -467,31 +505,55 @@ impl VitaTarget {
         &mut self,
         args: &mut SplitAsciiWhitespace<'_>,
         mut out: ConsoleOutput<'_>,
+        typ: PeekType,
     ) -> Result<(), SceError> {
-        let (Some(dst), Some(value)) = (args.next(), args.next()) else {
-            gdbstub::outputln!(out, "usage: poke <dst> <value> [S]");
+        let (Some(addr), Some(value)) = (args.next(), args.next()) else {
+            gdbstub::outputln!(out, "usage: poke <addr> <value>");
             return Ok(());
         };
-        let (Some(dst), Some(value)) = (parse_num(dst), parse_num(value)) else {
-            gdbstub::outputln!(out, "dst or value not valid");
+        let (Some(addr), Some(value)) = (parse_num(addr), parse_num(value)) else {
+            gdbstub::outputln!(out, "addr or value not valid");
             return Ok(());
         };
 
-        let secure = match args.next() {
-            None => false,
-            Some("S") => true,
-            Some(_) => {
-                gdbstub::outputln!(out, "usage: poke <addr> <value> [S]");
-                return Ok(());
-            }
+        match typ {
+            PeekType::Virtual => unsafe { core::ptr::write_volatile(addr as *mut u32, value) },
+            PeekType::Physical => phys_write32(addr, value)?,
+            PeekType::Secure => mep_write32(addr, value)?,
         };
-
-        if secure {
-            mep_write32(dst, value)?;
-        } else {
-            phys_write32(dst, value)?;
-        }
         gdbstub::outputln!(out, "OK");
         Ok(())
+    }
+
+    fn cmd_hexdump(
+        &mut self,
+        args: &mut SplitAsciiWhitespace<'_>,
+        mut out: ConsoleOutput<'_>,
+        typ: PeekType,
+    ) -> Result<(), SceError> {
+        let Some(addr) = args.next() else {
+            gdbstub::outputln!(out, "usage: hexdump <addr>");
+            return Ok(());
+        };
+        let Some(addr) = parse_num(addr) else {
+            gdbstub::outputln!(out, "addr not valid");
+            return Ok(());
+        };
+
+        let dump_cb = |base: u32, p: &[u32]| hex_dump(&mut out, base, p);
+
+        match typ {
+            PeekType::Virtual => (),
+            PeekType::Physical => phys_dump(addr, dump_cb)?,
+            PeekType::Secure => mep_dump(addr, dump_cb)?,
+        };
+        gdbstub::outputln!(out, "OK");
+        Ok(())
+    }
+}
+
+fn hex_dump(out: &mut ConsoleOutput<'_>, base: u32, p: &[u32]) {
+    for (i, value) in p.iter().enumerate() {
+        gdbstub::outputln!(out, "0x{:08x}: 0x{:08x}", base + i as u32 * 4, value);
     }
 }
