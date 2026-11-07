@@ -66,7 +66,17 @@ unsafe extern "C" {
         func_nid: u32,
         hook_func: *const c_void,
     ) -> i32;
+
     pub unsafe fn taiHookReleaseForKernel(tai_uid: SceUID, hook: &Ref) -> i32;
+
+    pub unsafe fn taiInjectDataForKernel(
+        pid: SceUID,
+        modid: SceUID,
+        segidx: i32,
+        offset: u32,
+        data: *const c_void,
+        size: usize,
+    ) -> i32;
 }
 
 pub fn hook_import(
@@ -86,10 +96,6 @@ pub fn hook_import(
         func_nid,
         hook_func
     ))
-}
-
-pub fn release(uid: SceUID, hook_ref: &Ref) {
-    sce_call!(taiHookReleaseForKernel(uid, hook_ref)).unwrap();
 }
 
 #[macro_export]

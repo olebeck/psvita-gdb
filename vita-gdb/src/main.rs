@@ -6,6 +6,9 @@ mod gdb;
 mod kernel;
 mod mep;
 mod net_fixup;
+mod panic;
+
+//use panic_never as _;
 
 pub const GDB_PORT: u16 = 31337;
 
@@ -18,8 +21,12 @@ pub extern "C" fn module_start(_argc: isize, _argv: *const u8) -> isize {
 fn main() {
     kernel::ffi::init_stubs();
     gdb::handlers::register_exception_handlers();
-    gdb::handlers::register_process_handlers();
-    gdb::handlers::register_sysevent_handler();
+    if let Err(err) = gdb::handlers::register_process_handlers() {
+        println!("register_process_handlers {err}");
+    }
+    if let Err(err) = gdb::handlers::register_sysevent_handler() {
+        println!("register_sysevent_handler {err}");
+    }
     /*
     if let Err(err) = net_fixup::fixup_netrecv_bug() {
         println!("fixup_netrecv_bug: {err}");

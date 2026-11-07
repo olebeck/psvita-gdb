@@ -220,15 +220,3 @@ vitastub!(SKPLForKernel, spl_exec_code, 0x18, 0x9fce5cbf, 0x4b856e73);
 pub fn spl_is_loaded() -> bool {
     !stub_is_invalid(spl_exec_code as _)
 }
-
-#[link(name = "taihenForKernel_stub", kind = "static")]
-unsafe extern "C" {
-    pub unsafe fn taiInjectDataForKernel(
-        pid: SceUID,
-        modid: SceUID,
-        segidx: i32,
-        offset: u32,
-        data: *const c_void,
-        size: usize,
-    ) -> i32;
-}

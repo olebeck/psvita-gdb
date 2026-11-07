@@ -1,19 +1,34 @@
-use arrayvec::ArrayVec;
-use core::{ffi::CStr, fmt::{Display, Write}, mem::zeroed, ptr::null_mut};
+use core::{
+    ffi::CStr,
+    fmt::{Display, Write},
+    mem::zeroed,
+    ptr::null_mut,
+};
 use gdbstub::{
-    common::{Pid, Tid}, target::{
-        Target, TargetError, TargetResult, ext::{
-            base::BaseOps, breakpoints::{
+    common::{Pid, Tid},
+    target::{
+        Target, TargetError, TargetResult,
+        ext::{
+            base::BaseOps,
+            breakpoints::{
                 Breakpoints, BreakpointsOps, HwBreakpoint, HwBreakpointOps, HwWatchpoint,
                 HwWatchpointOps, SwBreakpoint, SwBreakpointOps, WatchKind,
-            }, exec_file::{ExecFile, ExecFileOps}, extended_mode::{
+            },
+            exec_file::{ExecFile, ExecFileOps},
+            extended_mode::{
                 Args, AttachKind, CurrentActivePid, CurrentActivePidOps, ExtendedMode,
                 ExtendedModeOps, ShouldTerminate,
-            }, libraries::{Libraries, LibrariesOps}, monitor_cmd::MonitorCmdOps, process_info::{ProcessInfo, ProcessInfoOps, ProcessInfoResponse}, section_offsets::{Offsets, SectionOffsets, SectionOffsetsOps}, threads::{Threads, ThreadsOps},
+            },
+            libraries::{Libraries, LibrariesOps},
+            monitor_cmd::MonitorCmdOps,
+            process_info::{ProcessInfo, ProcessInfoOps, ProcessInfoResponse},
+            section_offsets::{Offsets, SectionOffsets, SectionOffsetsOps},
+            threads::{Threads, ThreadsOps},
         },
     },
 };
 use gdbstub_arch::arm::ArmBreakpointKind;
+use heapless::Vec;
 use vitasdk_sys::{SceAppMgrLaunchParam, SceUID, ksceAppMgrKillProcess, ksceAppMgrLaunchAppByPath};
 
 use crate::{
@@ -25,7 +40,8 @@ use crate::{
         thread::delay_thread,
         utils::{
             ArgvWriter, SceError, StreamWriter, get_module_ids, get_module_info, get_process_ids,
-            get_process_status, get_thread_ids, get_thread_info, halt_process, resume_process,
+            get_process_status, get_thread_ids, get_thread_info, halt_process, name_to_str,
+            resume_process, str_to_buf,
         },
     },
     println, sce_call,
@@ -62,7 +78,7 @@ pub struct VitaTarget {
     pub(crate) detached: bool,
     pub(crate) attach_kind: AttachKind,
     pub(crate) step_action: Option<SceUID>,
-    pub(crate) continue_actions: ArrayVec<SceUID, 64>,
+    pub(crate) continue_actions: Vec<SceUID, 64>,
 }
 
 impl VitaTarget {
@@ -73,15 +89,12 @@ impl VitaTarget {
             detached: false,
             attach_kind: AttachKind::Attach,
             step_action: None,
-            continue_actions: ArrayVec::new(),
+            continue_actions: Vec::new(),
         }
     }
 
     pub fn pid(&self) -> Option<SceUID> {
-        if let Some(session) = self.session.as_ref() {
-            return session.pid();
-        }
-        None
+        self.session.as_ref().map(|s| s.inner().pid())
     }
 
     pub fn attach(&mut self, pid: SceUID, kind: AttachKind) -> bool {
@@ -102,9 +115,8 @@ impl VitaTarget {
     pub fn detach(&mut self) {
         if let Some(session) = self.session.take() {
             session.clear_all();
-            if let Some(pid) = session.pid() {
-                let _ = resume_process(pid);
-            }
+            let pid = session.inner().pid();
+            let _ = resume_process(pid);
             self.detached = true;
         }
     }
@@ -203,7 +215,7 @@ impl ExtendedMode for VitaTarget {
     }
 
     fn restart(&mut self) -> Result<(), Self::Error> {
-        unimplemented!("never called");
+        Err(SceError::new(-1, "ExtendedMode::restart"))
     }
 
     fn query_if_attached(&mut self, pid: Pid) -> TargetResult<AttachKind, Self> {
@@ -299,7 +311,7 @@ impl ExtendedMode for VitaTarget {
 impl CurrentActivePid for VitaTarget {
     fn current_active_pid(&mut self) -> Result<Pid, Self::Error> {
         Ok(match self.pid() {
-            Some(pid) => Pid::new(pid as usize).unwrap(),
+            Some(pid) => unsafe { Pid::new_unchecked(pid as _) },
             None => FAKE_PID,
         })
     }
@@ -376,18 +388,22 @@ impl Threads for VitaTarget {
             let info = match get_thread_info(tid) {
                 Ok(info) => info,
                 Err(err) => {
-                    println!("get_thread_info(0x{:x}): {}", tid, err);
+                    println!("get_thread_info(0x{tid:x}): {err}");
                     continue;
                 }
             };
             let Ok(name) = unsafe { CStr::from_ptr(info.name.as_ptr() as _) }.to_str() else {
                 continue;
             };
-            let core = if info.currentCpuId >= 0 { info.currentCpuId } else { info.lastExecutedCpuId };
+            let core = if info.currentCpuId >= 0 {
+                info.currentCpuId
+            } else {
+                info.lastExecutedCpuId
+            };
             let _ = write!(
                 writer,
                 "<thread id=\"{}\" core=\"{core}\" name=\"{name}\" id_str=\"{name}\"></thread>",
-                format_tid(unsafe { Tid::new_unchecked(tid as _) })
+                format_tid(tid as _)
             );
         }
         let _ = write!(writer, "</threads>");
@@ -395,11 +411,11 @@ impl Threads for VitaTarget {
     }
 }
 
-fn format_tid(tid: Tid) -> impl Display {
-    struct TidDisplay(Tid);
+fn format_tid(tid: usize) -> impl Display {
+    struct TidDisplay(usize);
     impl Display for TidDisplay {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "{:08x}", self.0.get())
+            write!(f, "{:08x}", self.0)
         }
     }
     TidDisplay(tid)
@@ -441,9 +457,8 @@ impl ProcessInfo for VitaTarget {
         write_item: &mut dyn FnMut(&ProcessInfoResponse<'_>),
     ) -> Result<(), Self::Error> {
         for pid in get_process_ids()? {
-            if let Some(pid) = Pid::new(pid as _) {
-                write_item(&ProcessInfoResponse::Pid(pid));
-            }
+            let pid = unsafe { Pid::new_unchecked(pid as _) };
+            write_item(&ProcessInfoResponse::Pid(pid));
         }
         Ok(())
     }
@@ -454,7 +469,7 @@ impl ExecFile for VitaTarget {
         &self,
         pid: Option<Pid>,
         offset: u64,
-        length: usize,
+        _length: usize,
         buf: &mut [u8],
     ) -> TargetResult<usize, Self> {
         let Some(pid) = pid.map(|pid| pid.get() as i32).or(self.pid()) else {
@@ -475,16 +490,10 @@ impl ExecFile for VitaTarget {
             }
         };
 
-        let path = unsafe { core::slice::from_raw_parts(info.path.as_ptr() as _, info.path.len()) };
-        let path_len = path.len();
-        let offset = offset as usize;
-        let copy_len = length.min(buf.len());
-        if offset >= path_len || copy_len == 0 {
+        let Some(path) = name_to_str(&info.path) else {
             return Ok(0);
-        }
-        let count = (path_len - offset).min(copy_len);
-        buf[..count].copy_from_slice(&path[offset..offset + count]);
-        Ok(count)
+        };
+        Ok(str_to_buf(buf, path, offset as _))
     }
 }
 

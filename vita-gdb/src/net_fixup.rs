@@ -3,10 +3,7 @@ use core::mem::zeroed;
 use vitasdk_sys::{SceKernelModuleInfo, ksceKernelSearchModuleByName};
 
 use crate::{
-    kernel::{
-        ffi::{ksceKernelGetModuleInfo, taiInjectDataForKernel},
-        utils::SceError,
-    },
+    kernel::{ffi::ksceKernelGetModuleInfo, taihen::taiInjectDataForKernel, utils::SceError},
     println, sce_call,
 };
 
@@ -49,7 +46,7 @@ pub fn fixup_netrecv_bug() -> Result<(), SceError> {
     };
     let Some(offset) = text
         .windows(ORIG_CODE.len())
-        .position(|window| window == ORIG_CODE.as_slice())
+        .position(|window| window == &ORIG_CODE)
     else {
         println!("fixup_netrecv_bug: orig code not found");
         return Ok(());

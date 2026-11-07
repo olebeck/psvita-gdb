@@ -5,10 +5,13 @@ use vitasdk_sys::{SceKernelProcessInfo, SceUID, ksceKernelGetProcessInfo};
 
 use crate::{
     gdb::target::VitaTarget,
-    kernel::utils::{
-        SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
-        get_process_ids, get_process_status, get_process_titleid, get_thread_ids, get_thread_info,
-        name_to_str, phys_dump, phys_read32, phys_write32,
+    kernel::{
+        syscon::{SYSCON_COLD_RESET, syscon_cmd},
+        utils::{
+            SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
+            get_process_ids, get_process_status, get_process_titleid, get_thread_ids,
+            get_thread_info, name_to_str, phys_dump, phys_read32, phys_write32,
+        },
     },
     mep::{mep_dump, mep_read32, mep_write32},
     sce_call,
@@ -28,12 +31,20 @@ fn parse_num(target: &str) -> Option<u32> {
 
 fn resolve_pid_or_titleid(target: &str) -> Option<SceUID> {
     if let Some(pid) = parse_num(target) {
-        Some(pid as SceUID)
-    } else {
-        get_process_ids().map_or_default(|mut pids| {
-            pids.find(|pid| get_process_titleid(*pid).is_some_and(|t| t == target))
-        })
+        return Some(pid as SceUID);
+    };
+    for pid in get_process_ids().ok()? {
+        let Some(titleid) = get_process_titleid(pid) else {
+            continue;
+        };
+        let Some(titleid) = name_to_str(&titleid) else {
+            continue;
+        };
+        if titleid == target {
+            return Some(pid);
+        }
     }
+    None
 }
 
 enum PeekType {
@@ -58,7 +69,6 @@ impl MonitorCmd for VitaTarget {
         };
 
         match cmd {
-            "dump" => self.cmd_dump(&mut args, out),
             "ps" => self.cmd_ls_process(out),
             "ls" => self.cmd_ls(&mut args, out),
             "info" => self.cmd_info(&mut args, out),
@@ -70,6 +80,7 @@ impl MonitorCmd for VitaTarget {
             "pokes" => self.cmd_poke(&mut args, out, PeekType::Secure),
             "hexdumpp" => self.cmd_hexdump(&mut args, out, PeekType::Physical),
             "hexdumps" => self.cmd_hexdump(&mut args, out, PeekType::Secure),
+            "reset" => self.cmd_reset(&mut args, out),
             _ => self.cmd_help(&mut args, out),
         }
     }
@@ -81,7 +92,6 @@ impl VitaTarget {
         _args: &mut SplitAsciiWhitespace<'_>,
         mut out: ConsoleOutput<'_>,
     ) -> Result<(), SceError> {
-        gdbstub::outputln!(out, "dump                     Dump gdb session internals");
         gdbstub::outputln!(out, "ps                       Print a list of processes");
         gdbstub::outputln!(out, "ls process               Print a list of processes");
         gdbstub::outputln!(out, "ls thread <pid|titleid>  Print a list of threads");
@@ -92,38 +102,6 @@ impl VitaTarget {
         gdbstub::outputln!(out, "info memblock <uid>      Print memory block details");
         gdbstub::outputln!(out, "peek <addr> [S]          Peek a physical address");
         gdbstub::outputln!(out, "poke <addr> <value> [S]  Poke a physical address");
-        Ok(())
-    }
-
-    fn cmd_dump(
-        &mut self,
-        _args: &mut SplitAsciiWhitespace<'_>,
-        mut out: ConsoleOutput<'_>,
-    ) -> Result<(), SceError> {
-        let Some(session) = self.session.as_ref() else {
-            gdbstub::outputln!(out, "no session");
-            return Ok(());
-        };
-        let d = session.dump_state();
-
-        gdbstub::output!(out, "pid  ");
-        if let Some(pid) = d.pid {
-            gdbstub::outputln!(out, "0x{pid:x}");
-        } else {
-            gdbstub::outputln!(out, "(none)");
-        }
-        gdbstub::outputln!(out, "hw breakpoints  {}/6", d.hw_breakpoints.len());
-        for (i, a) in d.hw_breakpoints.iter().enumerate() {
-            gdbstub::outputln!(out, "  [{i}] 0x{a:x}");
-        }
-        gdbstub::outputln!(out, "hw watchpoints  {}/3", d.hw_watchpoints.len());
-        for (i, a) in d.hw_watchpoints.iter().enumerate() {
-            gdbstub::outputln!(out, "  [{i}] 0x{a:x}");
-        }
-        gdbstub::outputln!(out, "sw breakpoints  {}/16", d.sw_breakpoints.len());
-        for (i, a) in d.sw_breakpoints.iter().enumerate() {
-            gdbstub::outputln!(out, "  [{i}] 0x{a:x}");
-        }
         Ok(())
     }
 
@@ -155,7 +133,8 @@ impl VitaTarget {
         for pid in pids {
             gdbstub::output!(out, "0x{pid:x}");
             if let Some(titleid) = get_process_titleid(pid) {
-                gdbstub::output!(out, "  {titleid}");
+                let titleid = name_to_str(&titleid).unwrap_or("<invalid>");
+                gdbstub::output!(out, "  {titleid:<9}");
             } else {
                 gdbstub::output!(out, "  unknown");
             }
@@ -239,7 +218,7 @@ impl VitaTarget {
                     continue;
                 }
             };
-            let name = name_to_str(info.name.as_slice());
+            let name = name_to_str(&info.name).unwrap_or("<invalid>");
             gdbstub::output!(out, "  0x{tid:<9x} {:<32}", name);
             gdbstub::outputln!(
                 out,
@@ -278,8 +257,8 @@ impl VitaTarget {
                     continue;
                 }
             };
-            let name = name_to_str(info.module_name.as_slice());
-            let path = name_to_str(info.path.as_slice());
+            let name = name_to_str(&info.module_name).unwrap_or("<invalid>");
+            let path = name_to_str(&info.path).unwrap_or("<invalid>");
             gdbstub::outputln!(
                 out,
                 "0x{modid:<9x} {:<32} state=0x{:x} {path}",
@@ -328,6 +307,7 @@ impl VitaTarget {
         gdbstub::outputln!(out, "pid       0x{:x}", info.pid);
         gdbstub::outputln!(out, "ppid      0x{:x}", info.ppid);
         if let Some(titleid) = get_process_titleid(pid) {
+            let titleid = name_to_str(&titleid).unwrap_or("<invalid>");
             gdbstub::outputln!(out, "titleid   {titleid}");
         }
         match get_process_status(pid) {
@@ -353,10 +333,11 @@ impl VitaTarget {
                 return Ok(());
             }
         };
+        let name = name_to_str(&info.name).unwrap_or("<invalid>");
 
         gdbstub::outputln!(out, "tid       0x{tid:x}");
         gdbstub::outputln!(out, "pid       0x{:x}", info.processId);
-        gdbstub::outputln!(out, "name      {}", name_to_str(info.name.as_slice()));
+        gdbstub::outputln!(out, "name      {name}");
         gdbstub::outputln!(out, "status    0x{:x}", info.status);
         gdbstub::outputln!(out, "attr      0x{:x}", info.attr);
         match info.entry {
@@ -422,12 +403,17 @@ impl VitaTarget {
         gdbstub::outputln!(out, "partition  {}", info.core_info.partition_guid);
         for i in 0..(info.physical_range_count_written as usize).min(info.physical_addresses.len())
         {
+            let (Some(paddr), Some(psize)) =
+                (info.physical_addresses.get(i), info.physical_sizes.get(i))
+            else {
+                continue;
+            };
             gdbstub::outputln!(
                 out,
                 "physical[{}] base=0x{:x} size=0x{:x}",
                 i,
-                info.physical_addresses[i] as u32,
-                info.physical_sizes[i]
+                *paddr as u32,
+                *psize
             );
         }
         Ok(())
@@ -454,9 +440,9 @@ impl VitaTarget {
                 return Ok(());
             }
         };
-        let name = name_to_str(info.module_name.as_slice());
-        let path = name_to_str(info.path.as_slice());
-        gdbstub::outputln!(out, "0x{uid:<9x} {:<32}", name);
+        let name = name_to_str(&info.module_name).unwrap_or("<invalid>");
+        let path = name_to_str(&info.path).unwrap_or("<invalid>");
+        gdbstub::outputln!(out, "0x{uid:<9x} {name:<32}");
         gdbstub::outputln!(out, "  {path}");
         gdbstub::outputln!(out, "  state=0x{:x}", info.state);
 
@@ -550,10 +536,26 @@ impl VitaTarget {
         gdbstub::outputln!(out, "OK");
         Ok(())
     }
+
+    fn cmd_reset(
+        &mut self,
+        _args: &mut SplitAsciiWhitespace<'_>,
+        mut out: ConsoleOutput<'_>,
+    ) -> Result<(), SceError> {
+        if let Err(err) = syscon_cmd(SYSCON_COLD_RESET) {
+            gdbstub::outputln!(out, "{err}");
+        }
+        Ok(())
+    }
 }
 
 fn hex_dump(out: &mut ConsoleOutput<'_>, base: u32, p: &[u32]) {
     for (i, value) in p.iter().enumerate() {
-        gdbstub::outputln!(out, "0x{:08x}: 0x{:08x}", base + i as u32 * 4, value);
+        gdbstub::outputln!(
+            out,
+            "0x{:08x}: 0x{:08x}",
+            base.wrapping_add((i as u32).wrapping_mul(4)),
+            value
+        );
     }
 }

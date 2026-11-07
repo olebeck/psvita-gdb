@@ -1,5 +1,4 @@
 use core::ffi::c_void;
-use core::panic;
 use core::ptr::null_mut;
 
 use gdbstub::target::ext::breakpoints::WatchKind;
@@ -15,7 +14,7 @@ use vitasdk_sys::{
 use crate::cp14::enable_debug;
 use crate::gdb::exception_report;
 use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, find_session_for_pid};
-use crate::kernel::utils::PROCESS_HALT_STATUS;
+use crate::kernel::utils::{PROCESS_HALT_STATUS, SceError};
 use crate::kernel::{
     ffi::{ksceExcpmgrRegisterHandler, ksceKernelCopyFromUserProc, ksceKernelSuspendProcess},
     utils::get_thread_context_info,
@@ -319,17 +318,14 @@ static PROC_HANDLER2: SceProcEventHandler = SceProcEventHandler {
     switch_process: None,
 };
 
-pub fn register_process_handlers() {
-    if let Err(err) = sce_call!(ksceKernelSysrootSetProcessHandler(&PROC_HANDLER)) {
-        panic!("{err}");
-    }
-    if let Err(err) = sce_call!(ksceKernelRegisterProcEventHandler(
+pub fn register_process_handlers() -> Result<(), SceError> {
+    sce_call!(ksceKernelSysrootSetProcessHandler(&PROC_HANDLER))?;
+    sce_call!(ksceKernelRegisterProcEventHandler(
         c"gdb_proc_event".as_ptr(),
         &PROC_HANDLER2,
         0
-    )) {
-        panic!("{err}");
-    }
+    ))?;
+    Ok(())
 }
 
 unsafe extern "C" fn handle_sysevent(
@@ -346,12 +342,11 @@ unsafe extern "C" fn handle_sysevent(
     0
 }
 
-pub fn register_sysevent_handler() {
-    if let Err(err) = sce_call!(ksceKernelRegisterSysEventHandler(
+pub fn register_sysevent_handler() -> Result<(), SceError> {
+    sce_call!(ksceKernelRegisterSysEventHandler(
         c"enable_debug".as_ptr(),
         Some(handle_sysevent),
         null_mut()
-    )) {
-        panic!("register_sysevent_handlers: {err}");
-    }
+    ))?;
+    Ok(())
 }

@@ -61,7 +61,7 @@ fn report(
         .as_ref()
         .and_then(|info| stack_info(info, context.sp));
     if let Some(info) = &thread {
-        let name = name_to_str(info.name.as_slice());
+        let name = name_to_str(&info.name).unwrap_or("<invalid>");
         match &stack {
             Some(stack) => println!(
                 "  thread={name} stack=0x{:08x}..0x{:08x}",
@@ -127,7 +127,7 @@ fn report(
 
     print_backtrace(pid, tid, stack.as_ref());
 
-    print!("\n");
+    print!("\n\n");
 }
 
 fn print_backtrace(pid: SceUID, tid: SceUID, stack: Option<&StackInfo>) {
@@ -136,7 +136,7 @@ fn print_backtrace(pid: SceUID, tid: SceUID, stack: Option<&StackInfo>) {
     if let Err(err) = sce_call!(ksceKernelBacktrace(
         tid,
         frames.as_mut_ptr(),
-        (frames.len() as u32) * (core::mem::size_of::<SceKernelCallFrame>() as u32),
+        (frames.len() as u32).wrapping_mul(core::mem::size_of::<SceKernelCallFrame>() as u32),
         &mut num_frames,
         SCE_KERNEL_BACKTRACE_MODE_USER as _,
     )) {
@@ -152,8 +152,8 @@ fn print_backtrace(pid: SceUID, tid: SceUID, stack: Option<&StackInfo>) {
 
     println!("  backtrace:");
     for (index, frame) in frames.iter().take(count).enumerate() {
-        println!("  #{index:<2} sp=0x{:08x}", frame.sp as u32);
-        print_word("pc", frame.pc as u32, pid, stack);
+        println!("  #{index:<2} sp=0x{:08x}", frame.sp);
+        print_word("pc", frame.pc, pid, stack);
     }
 }
 
@@ -176,13 +176,13 @@ fn print_word(label: &str, value: u32, pid: SceUID, stack: Option<&StackInfo>) {
     if let Some(stack) = stack {
         let addr = value as u64;
         if addr >= stack.start && addr < stack.end {
-            let offset = addr - stack.start;
-            let sp_offset = addr as i64 - stack.sp as i64;
+            let offset = addr.wrapping_sub(stack.start);
+            let sp_offset = (addr as i64).saturating_sub(stack.sp as i64);
             print!("  stack+0x{offset:x} (");
             if sp_offset >= 0 {
                 print!("sp+0x{:x}", sp_offset as u64);
             } else {
-                print!("sp-0x{:x}", (-sp_offset) as u64);
+                print!("sp-0x{:x}", (sp_offset.wrapping_neg()) as u64);
             }
             println!(")");
             return;
@@ -215,7 +215,7 @@ fn print_module(pid: SceUID, addr: u32) -> bool {
         println!("  module:0x{modid:x}");
         return true;
     };
-    let name = name_to_str(info.module_name.as_slice());
+    let name = name_to_str(&info.module_name).unwrap_or("<invalid>");
     let addr = addr as u64;
     let offset = info
         .segments
@@ -224,7 +224,7 @@ fn print_module(pid: SceUID, addr: u32) -> bool {
         .find_map(|segment| {
             let start = segment.vaddr as usize as u64;
             let end = start.saturating_add(segment.memsz as u64);
-            (addr >= start && addr < end).then_some((addr - start) as u32)
+            (addr >= start && addr < end).then_some(addr.wrapping_sub(start) as u32)
         })
         .unwrap_or_default();
     println!("  module:{name:<20}+0x{offset:x}");

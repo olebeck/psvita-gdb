@@ -122,25 +122,45 @@ impl TcpConn {
         if len == 0 {
             return ReadResult::None;
         }
-        let byte = unsafe { &mut *self.state.buf.get() }[self.read_len];
-        self.read_len += 1;
+        let buf = unsafe { &mut *self.state.buf.get() };
+        let Some(byte) = buf.get(self.read_len) else {
+            return ReadResult::None;
+        };
+        self.read_len = self.read_len.wrapping_add(1);
         if self.read_len == len {
             self.read_len = 0;
             self.state.len.store(0, Ordering::Relaxed);
             let _ = self.evflag.set(EV_WAKE_READER);
         }
-        ReadResult::Byte(byte)
+        ReadResult::Byte(*byte)
     }
 
     fn flush_write_buffer(&mut self) -> Result<(), SceError> {
         while self.write_len > 0 {
-            let n = self.socket.send(&self.write_buffer[..self.write_len])?;
+            let write_len = self.write_len.min(self.write_buffer.len());
+            let buf_slice = match self.write_buffer.get(..write_len) {
+                Some(slice) => slice,
+                None => break,
+            };
+
+            let n = self.socket.send(buf_slice)?;
             if n == 0 {
                 return Err(SceError::new(-1, "send returned 0"));
             }
-            if n < self.write_len {
-                self.write_buffer.copy_within(n..self.write_len, 0);
-                self.write_len -= n;
+
+            if n < write_len {
+                let remaining = write_len.saturating_sub(n);
+                for i in 0..remaining {
+                    let src_idx = n.wrapping_add(i);
+                    let Some(val) = self.write_buffer.get(src_idx).cloned() else {
+                        continue;
+                    };
+                    let Some(dst) = self.write_buffer.get_mut(i) else {
+                        continue;
+                    };
+                    *dst = val;
+                }
+                self.write_len = remaining;
             } else {
                 self.write_len = 0;
             }
@@ -174,8 +194,10 @@ impl Connection for TcpConn {
         if self.write_len == self.write_buffer.len() {
             self.flush_write_buffer()?;
         }
-        self.write_buffer[self.write_len] = byte;
-        self.write_len += 1;
+        if let Some(b) = self.write_buffer.get_mut(self.write_len) {
+            *b = byte;
+        }
+        self.write_len = self.write_len.wrapping_add(1);
         if self.write_len == self.write_buffer.len() {
             self.flush_write_buffer()?
         }

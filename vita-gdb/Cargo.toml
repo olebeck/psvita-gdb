@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arrayvec = { version = "0.7.8", default-features = false }
 gdbstub = { git = "https://github.com/olebeck/gdbstub", branch = "dev/0.8", default-features = false }
 gdbstub_arch = { git = "https://github.com/olebeck/gdbstub", branch = "dev/0.8", default-features = false }
 paste = "1.0.15"
@@ -25,5 +24,20 @@ vitasdk-sys = { git = "https://github.com/olebeck/vitasdk-sys", features = [
     "SceKernelSuspendForDriver_stub",
     "SceModulemgrForDriver_stub",
     "SceBacktraceForDriver_stub",
+    "SceSysconForDriver_stub"
 ] }
 arm-next-pc = { path = "../arm-next-pc" }
+panic-never = "0.1.0"
+heapless = { version = "0.9.3", default-features = false }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic_in_result_fn = "deny"
+collapsible_if = "allow"

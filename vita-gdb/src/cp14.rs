@@ -6,7 +6,7 @@ use vitasdk_sys::{
 };
 
 use crate::{
-    kernel::{ffi::spl_is_loaded, utils::SceError},
+    kernel::{ffi::spl_is_loaded, syscon::scratch_switch, utils::SceError},
     mep::spl_exec,
     println,
 };
@@ -19,6 +19,12 @@ const CP14_NMP: [u8; 60] = [
 ];
 
 pub fn enable_debug() -> Result<(), SceError> {
+    scratch_switch(0xe4, true)?;
+
+    let val = unsafe { ksceKernelCheckDipsw(0xe4) };
+    println!("ksceKernelCheckDipsw(0xe4): {}", val);
+    return Ok(());
+
     if !spl_is_loaded() {
         println!("no psp2spl, not enabling hw breakpoints.");
         return Ok(());

@@ -39,6 +39,7 @@ pub trait MemReader {
     }
 }
 
+#[derive(Default)]
 pub struct RegContext {
     pub r: [u32; 13],
     pub sp: u32,
@@ -48,19 +49,6 @@ pub struct RegContext {
     pub spsr: u32,
 }
 
-impl Default for RegContext {
-    fn default() -> Self {
-        Self {
-            r: [0u32; 13],
-            sp: 0,
-            lr: 0,
-            pc: 0,
-            cpsr: 0,
-            spsr: 0,
-        }
-    }
-}
-
 impl RegContext {
     fn thumb(&self) -> bool {
         (self.cpsr >> 5) & 1 != 0
@@ -68,11 +56,11 @@ impl RegContext {
 
     fn reg(&self, idx: u8) -> u32 {
         match idx {
-            0..13 => self.r[idx as usize],
+            0..13 => self.r.get(idx as usize).copied().unwrap_or(0xdeadbeef),
             13 => self.sp,
             14 => self.lr,
             15 => self.pc,
-            _ => unreachable!(),
+            _ => 0xdeadbeef,
         }
     }
 

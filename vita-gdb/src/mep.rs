@@ -1,3 +1,5 @@
+use core::ptr::null_mut;
+
 use vitasdk_sys::SceUID;
 
 use crate::kernel::{
@@ -17,11 +19,13 @@ const BRIDGE_NMP: [u8; 68] = [
 const FUD_COMMS_PA: u32 = 0x1F85C000;
 const FUD_COMMS_SIZE: usize = 0x4000;
 
-static mut FUD_COMMS: Option<(SceUID, *mut u8)> = None;
+static mut FUD_COMMS_UID: SceUID = -1;
+static mut FUD_COMMS_VA: Option<*mut u8> = None;
 
 fn fud_init() -> Result<(), SceError> {
     let (uid, base) = map_paddr(c"fud_comms", FUD_COMMS_PA, FUD_COMMS_SIZE)?;
-    unsafe { FUD_COMMS = Some((uid, base as *mut u8)) };
+    unsafe { FUD_COMMS_UID = uid }
+    unsafe { FUD_COMMS_VA = Some(base as *mut u8) }
     Ok(())
 }
 
@@ -35,16 +39,14 @@ fn fud_bridge_exec(exec_addr: u32, args: &[u32]) -> Result<u32, SceError> {
     if !spl_is_loaded() {
         return Err(SceError::new(-1, "fud_bridge_exec: psp2spl not loaded"));
     }
-    if unsafe { FUD_COMMS }.is_none() {
+    if unsafe { FUD_COMMS_UID } == -1 {
         fud_init()?;
     }
-    let bridge_data = match unsafe { FUD_COMMS } {
-        Some(comms) => unsafe { &mut *(comms.1 as *mut FudBridgeData) },
-        None => return Err(SceError::new(-3, "fud_bridge_exec")),
-    };
+    let comms_va = unsafe { FUD_COMMS_VA }.unwrap_or(null_mut());
+    let bridge_data = unsafe { &mut *(comms_va as *mut FudBridgeData) };
     bridge_data.paddr = exec_addr;
-    for (i, arg) in args.iter().take(8).enumerate() {
-        bridge_data.args[i] = *arg;
+    for (arg, val) in bridge_data.args.iter_mut().zip(args) {
+        *arg = *val;
     }
     spl_exec(&BRIDGE_NMP, FUD_COMMS_PA)
 }
@@ -56,17 +58,19 @@ pub fn mep_write32(dst: u32, val: u32) -> Result<(), SceError> {
 
 pub fn mep_read32(addr: u32) -> Result<u32, SceError> {
     fud_bridge_exec(0x00807262, &[FUD_COMMS_PA + 0x10, addr, 0x4])?;
-    let value = unsafe { FUD_COMMS.unwrap().1.add(0x10).cast::<u32>().read_volatile() };
+    let comms_va = unsafe { FUD_COMMS_VA }.unwrap_or(null_mut());
+    let value = unsafe { comms_va.add(0x10).cast::<u32>().read_volatile() };
     Ok(value)
 }
 
 pub fn mep_read(addr: u32, buf: &mut [u32]) -> Result<(), SceError> {
     fud_bridge_exec(
         0x00807262,
-        &[FUD_COMMS_PA + 0x10, addr, (buf.len() * 4) as _],
+        &[FUD_COMMS_PA + 0x10, addr, buf.len().saturating_mul(4) as _],
     )?;
+    let comms_va = unsafe { FUD_COMMS_VA }.unwrap_or(null_mut());
     unsafe {
-        let p = FUD_COMMS.unwrap().1.add(0x10).cast::<u32>();
+        let p = comms_va.add(0x10).cast::<u32>();
         core::ptr::copy(p, buf.as_mut_ptr(), buf.len());
     }
     Ok(())

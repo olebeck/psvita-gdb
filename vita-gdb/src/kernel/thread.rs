@@ -76,7 +76,7 @@ impl<T: 'static> JoinableThread<T> {
     }
 
     pub fn start(&self, entry: fn(T), arg: T) -> Result<(), SceError> {
-        start_thread(self.thid, ThreadArg { entry: entry, arg })
+        start_thread(self.thid, ThreadArg { entry, arg })
     }
 
     pub fn join(self) -> Result<i32, SceError> {
@@ -112,7 +112,7 @@ impl<T: 'static> DetachedThread<T> {
     }
 
     pub fn start(self, entry: fn(T), arg: T) -> Result<(), SceError> {
-        let result = start_thread(self.thid, ThreadArg { entry: entry, arg });
+        let result = start_thread(self.thid, ThreadArg { entry, arg });
         if result.is_err() {
             let _ = unsafe { ksceKernelDeleteThread(self.thid) };
         }

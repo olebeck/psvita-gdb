@@ -1,4 +1,4 @@
-use core::{mem::zeroed, num::NonZero};
+use core::mem::zeroed;
 
 use arm_next_pc::{MemReader, RegContext};
 use gdbstub::{
@@ -35,7 +35,7 @@ use crate::{
         },
         utils::{
             PROCESS_STATUS_SUSPENDED, SceError, get_process_status, get_thread_ids,
-            get_thread_info, name_to_str, write_user_text,
+            get_thread_info, name_to_str, str_to_buf, write_user_text,
         },
     },
     println, sce_call,
@@ -62,9 +62,6 @@ pub const SCE_REG_FPSCR: u32 = 1 << 17;
 
 impl MultiThreadBase for VitaTarget {
     fn read_registers(&mut self, regs: &mut Armv7Regs, tid: Tid) -> TargetResult<(), Self> {
-        if self.session.is_none() {
-            return Err(gdbstub::target::TargetError::NonFatal);
-        }
         let tid = tid.get() as SceUID;
 
         let mut registers: SceThreadCpuRegisters = unsafe { zeroed() };
@@ -217,14 +214,16 @@ impl MultiThreadBase for VitaTarget {
             return Ok(());
         };
         for tid in get_thread_ids(pid)? {
-            thread_is_active(Tid::new(tid as usize).unwrap());
+            let thid = unsafe { Tid::new_unchecked(tid as _) };
+            thread_is_active(thid);
         }
         Ok(())
     }
 
     #[inline(always)]
     fn is_thread_alive(&mut self, tid: Tid) -> Result<bool, Self::Error> {
-        Ok(get_thread_info(tid.get() as SceUID).is_ok())
+        let tid = tid.get() as SceUID;
+        Ok(get_thread_info(tid).is_ok())
     }
 
     #[inline(always)]
@@ -290,8 +289,8 @@ impl MultiThreadResume for VitaTarget {
         if let Some(step) = self.step_action {
             println!("stepping {step}");
         }
-        for tid in self.continue_actions.as_ref() {
-            println!("continue {}", *tid)
+        for tid in self.continue_actions.iter() {
+            println!("continue {}", tid)
         }
 
         const STATUS_SUSPEND: i32 = 1;
@@ -300,52 +299,17 @@ impl MultiThreadResume for VitaTarget {
         for tid in get_thread_ids(pid)? {
             let mut status = STATUS_RUNNING;
 
-            if self.continue_actions.len() > 0 {
+            if !self.continue_actions.is_empty() {
                 status = STATUS_SUSPEND;
             }
 
             if self.step_action.is_some_and(|id| id == tid) {
                 self.step_action = None;
                 status = STATUS_RUNNING;
-
-                let thid = NonZero::new(tid as usize).unwrap();
-                let mut regs = Armv7Regs::default();
-                self.read_registers(&mut regs, thid)
-                    .map_err(|_err| SceError::new(-1, "read_registers"))?;
-
-                let mut insn = [0u8; 4];
-                self.read(regs.pc as _, &mut insn).unwrap();
-
-                let thumb = (regs.cpsr >> 5) & 1 != 0;
-                println!("insn: {:02x?} thumb {}", insn, thumb);
-
-                regs.pc = regs.pc.wrapping_add(if thumb { 4 } else { 8 });
-                match arm_next_pc::next_pc(&arm_reg_context(&regs), self) {
-                    Err(err) => {
-                        println!("next_pc: {err:?}");
-                        return Err(SceError::new(-1, "next_pc"));
-                    }
-                    Ok((addr, thumb)) => {
-                        println!("curr_pc={:x} next_pc={:x}", regs.pc, addr);
-
-                        let session = self.session.as_ref().unwrap();
-                        let kind = if thumb {
-                            ArmBreakpointKind::Thumb16
-                        } else {
-                            ArmBreakpointKind::Arm32
-                        };
-                        session.inner().set_sw_breakpoint(addr, kind);
-                        session.set_step(tid, addr)?;
-                    }
-                }
+                self.set_step(tid)?;
             }
 
-            if self
-                .continue_actions
-                .iter()
-                .find(|id| **id == tid)
-                .is_some()
-            {
+            if self.continue_actions.contains(&tid) {
                 status = STATUS_RUNNING;
             }
 
@@ -373,7 +337,7 @@ impl MultiThreadResume for VitaTarget {
         }
         if let Some(tid) = tid {
             let tid = tid.get() as SceUID;
-            if self.continue_actions.try_push(tid).is_err() {
+            if self.continue_actions.push(tid).is_err() {
                 return Err(SceError::new(-1, "continue_actions full"));
             }
         }
@@ -383,6 +347,48 @@ impl MultiThreadResume for VitaTarget {
     #[inline(always)]
     fn support_single_step(&mut self) -> Option<MultiThreadSingleStepOps<'_, Self>> {
         Some(self)
+    }
+}
+
+impl VitaTarget {
+    fn set_step(&mut self, tid: SceUID) -> Result<(), SceError> {
+        let thid = unsafe { Tid::new_unchecked(tid as _) };
+
+        let mut regs = Armv7Regs::default();
+        if let Err(_err) = self.read_registers(&mut regs, thid) {
+            return Err(SceError::new(-1, "read_registers"));
+        }
+
+        let mut insn = [0u8; 4];
+        if self.read(regs.pc as _, &mut insn).is_none() {
+            return Err(SceError::new(-1, "read_registers read pc insn"));
+        }
+
+        let thumb = (regs.cpsr >> 5) & 1 != 0;
+        println!("insn: {:02x?} thumb {}", insn, thumb);
+
+        regs.pc = regs.pc.wrapping_add(if thumb { 4 } else { 8 });
+        let (addr, thumb) = match arm_next_pc::next_pc(&arm_reg_context(&regs), self) {
+            Err(err) => {
+                println!("next_pc: {err:?}");
+                return Err(SceError::new(-1, "next_pc"));
+            }
+            Ok(next) => next,
+        };
+        println!("curr_pc={:x} next_pc={:x}", regs.pc, addr);
+
+        let kind = if thumb {
+            ArmBreakpointKind::Thumb16
+        } else {
+            ArmBreakpointKind::Arm32
+        };
+
+        let Some(session) = self.session.as_ref() else {
+            return Ok(());
+        };
+        session.inner().set_sw_breakpoint(addr, kind);
+        session.set_step(tid, addr)?;
+        Ok(())
     }
 }
 
@@ -407,10 +413,10 @@ impl ThreadExtraInfo for VitaTarget {
             return Ok(0);
         }
         let info = get_thread_info(tid.get() as SceUID)?;
-        let name = name_to_str(info.name.as_slice());
-        let len = name.len().min(buf.len());
-        buf[..len].copy_from_slice(&name.as_bytes()[..len]);
-        Ok(len)
+        let Some(name) = name_to_str(&info.name) else {
+            return Ok(0);
+        };
+        Ok(str_to_buf(buf, name, 0))
     }
 }
 
@@ -436,8 +442,13 @@ impl SingleRegisterAccess for VitaTarget {
                     return Err(gdbstub::target::TargetError::NonFatal);
                 }
             };
-            buf.copy_from_slice(&vfp[dpr as usize].to_le_bytes());
-            return Ok(buf.len());
+            let Some(reg) = vfp.get(dpr as usize) else {
+                return Ok(0);
+            };
+            for (dst, val) in buf.iter_mut().zip(&reg.to_le_bytes()) {
+                *dst = *val;
+            }
+            return Ok(8);
         };
 
         let mut registers: SceThreadCpuRegisters = unsafe { zeroed() };
@@ -468,14 +479,14 @@ impl SingleRegisterAccess for VitaTarget {
                 10 => th_regs.r10,
                 11 => th_regs.r11,
                 12 => th_regs.r12,
-                _ => unreachable!(),
+                _ => 0xdeadbeef,
             },
             Armv7RegId::Sp => th_regs.sp,
             Armv7RegId::Lr => th_regs.lr,
             Armv7RegId::Pc => th_regs.pc,
             Armv7RegId::Cpsr => th_regs.cpsr,
+            Armv7RegId::Dpr(_) => 0xdeadbeef, // TODO
             Armv7RegId::Fpscr => th_regs.fpscr,
-            _ => todo!("neon"),
         };
         buf.copy_from_slice(&value.to_le_bytes());
         Ok(buf.len())
@@ -488,7 +499,9 @@ impl SingleRegisterAccess for VitaTarget {
         val: &[u8],
     ) -> TargetResult<(), Self> {
         let tid = tid.get() as SceUID;
-        let value = u32::from_le_bytes(val.try_into().unwrap());
+        let Ok(value) = val.try_into().map(u32::from_le_bytes) else {
+            return Ok(());
+        };
 
         let mut regs: SceArmCpuRegisters = unsafe { zeroed() };
         let (reg, mask) = match reg_id {
@@ -506,14 +519,14 @@ impl SingleRegisterAccess for VitaTarget {
                 10 => (&mut regs.r10, SCE_REG_R10),
                 11 => (&mut regs.r11, SCE_REG_R11),
                 12 => (&mut regs.r12, SCE_REG_R12),
-                _ => unreachable!(),
+                _ => return Err(TargetError::NonFatal),
             },
             Armv7RegId::Sp => (&mut regs.sp, SCE_REG_SP),
             Armv7RegId::Lr => (&mut regs.lr, SCE_REG_LR),
             Armv7RegId::Pc => (&mut regs.pc, SCE_REG_PC),
             Armv7RegId::Cpsr => (&mut regs.cpsr, SCE_REG_CPSR),
+            Armv7RegId::Dpr(_) => return Err(TargetError::NonFatal),
             Armv7RegId::Fpscr => (&mut regs.fpscr, SCE_REG_FPSCR),
-            _ => return Err(TargetError::NonFatal),
         };
         *reg = value;
 

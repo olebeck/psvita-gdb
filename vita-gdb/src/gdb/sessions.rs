@@ -1,9 +1,9 @@
 use core::{
     cell::UnsafeCell,
+    ops::Range,
     sync::atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
-use arrayvec::ArrayVec;
 use gdbstub_arch::arm::ArmBreakpointKind;
 use vitasdk_sys::SceUID;
 
@@ -119,10 +119,10 @@ impl GdbSessionInner {
         self.pid.store(PID_UNUSED, Ordering::Release);
     }
 
-    pub fn pid(&self) -> Option<SceUID> {
+    pub fn pid(&self) -> SceUID {
         match self.pid.load(Ordering::Acquire) {
-            PID_UNUSED => None,
-            pid => Some(pid),
+            PID_UNUSED => -1,
+            pid => pid,
         }
     }
 
@@ -173,8 +173,9 @@ impl GdbSessionInner {
         };
         self.clear_sw_breakpoint(step_addr);
         *self.step_result.lock() = Some(step_tid);
-        let evflag = self.evflag().unwrap();
-        let _ = evflag.set(EV_WAKE_WORKER);
+        if let Some(evflag) = self.evflag() {
+            let _ = evflag.set(EV_WAKE_WORKER);
+        }
     }
 
     pub fn pop_step_finished(&self) -> Option<SceUID> {
@@ -202,7 +203,7 @@ impl GdbSessionInner {
         if !is_debug_enabled() {
             return Ok(false);
         }
-        let pid = self.pid().unwrap();
+        let pid = self.pid();
         let mut wps = self.hw_watchpoints.lock();
 
         for (idx, slot) in wps.iter_mut().enumerate() {
@@ -232,7 +233,7 @@ impl GdbSessionInner {
         if !is_debug_enabled() {
             return Ok(false);
         }
-        let pid = self.pid().unwrap();
+        let pid = self.pid();
         let mut wps = self.hw_watchpoints.lock();
 
         for (idx, slot) in wps.iter_mut().enumerate() {
@@ -249,7 +250,7 @@ impl GdbSessionInner {
         if !is_debug_enabled() {
             return Ok(false);
         }
-        let pid = self.pid().unwrap();
+        let pid = self.pid();
         let mut bps = self.hw_breakpoints.lock();
 
         for slot in bps.iter_mut() {
@@ -272,7 +273,7 @@ impl GdbSessionInner {
         if !is_debug_enabled() {
             return Ok(false);
         }
-        let pid = self.pid().unwrap();
+        let pid = self.pid();
         let mut bps = self.hw_breakpoints.lock();
 
         for (idx, slot) in bps.iter_mut().enumerate() {
@@ -287,9 +288,7 @@ impl GdbSessionInner {
 
     pub fn set_sw_breakpoint(&self, addr: u32, kind: ArmBreakpointKind) -> bool {
         println!("set_sw_breakpoint addr={addr:x}");
-        let Some(pid) = self.pid() else {
-            return false;
-        };
+        let pid = self.pid();
 
         if is_shared_address(addr) {
             println!("cant sw break in shared libraries (yet?)");
@@ -353,18 +352,18 @@ impl GdbSessionInner {
             Ok(_) => true,
             Err(err) => {
                 println!("set_sw_breakpoint: {err}");
-                let mut sw = self.sw_breakpoints.lock();
-                sw[claimed] = None;
+                let mut sw_bps = self.sw_breakpoints.lock();
+                if let Some(sw) = sw_bps.get_mut(claimed) {
+                    *sw = None;
+                }
                 false
             }
         }
     }
 
     pub fn clear_sw_breakpoint(&self, addr: u32) -> bool {
-        let Some(pid) = self.pid() else {
-            return false;
-        };
         println!("clear_sw_breakpoint addr={addr:x}");
+        let pid = self.pid();
         let mut sws = self.sw_breakpoints.lock();
         for slot in sws.iter_mut() {
             if slot.as_ref().is_some_and(|slot| slot.addr == addr) {
@@ -387,7 +386,10 @@ impl GdbSessionInner {
         let Some(slot) = slot.take() else {
             return Ok(());
         };
-        write_user_text(pid, slot.addr, &slot.orig.as_slice()[0..slot.patch_len])?;
+        let Some(orig) = slot.orig.get(0..slot.patch_len) else {
+            return Ok(());
+        };
+        write_user_text(pid, slot.addr, orig)?;
         Ok(())
     }
 
@@ -416,7 +418,11 @@ fn wp_control(kind: WatchKind) -> u32 {
 }
 
 fn is_shared_address(addr: u32) -> bool {
-    addr >= 0xE0000000 && addr < 0xF0000000
+    Range::<u32> {
+        start: 0xE0000000,
+        end: 0xF0000000,
+    }
+    .contains(&addr)
 }
 
 pub struct GdbSession {
@@ -426,11 +432,10 @@ pub struct GdbSession {
 impl GdbSession {
     pub fn new(flag: EventFlagRef, pid: SceUID) -> Option<Self> {
         let _guard = SESSION_ALLOC_LOCK.lock();
-        if SESSION_POOL
-            .iter()
-            .any(|s| s.pid.load(Ordering::Acquire) == pid)
-        {
-            return None;
+        for s in SESSION_POOL.iter() {
+            if s.pid.load(Ordering::Acquire) == pid {
+                return None;
+            }
         }
 
         let slot = SESSION_POOL.iter().position(|s| {
@@ -439,7 +444,9 @@ impl GdbSession {
                 .is_ok()
         })?;
 
-        let inner = &SESSION_POOL[slot];
+        let Some(inner) = &SESSION_POOL.get(slot) else {
+            return None;
+        };
         unsafe {
             *inner.evflag.get() = Some(flag);
         }
@@ -448,10 +455,6 @@ impl GdbSession {
 
     pub fn inner(&self) -> &'static GdbSessionInner {
         self.inner
-    }
-
-    pub fn pid(&self) -> Option<SceUID> {
-        self.inner().pid()
     }
 
     pub fn set_hw_watchpoint(
@@ -519,48 +522,6 @@ impl GdbSession {
             }
         }
     }
-
-    pub fn dump_state(&self) -> DumpState {
-        let inner = self.inner();
-
-        let mut hw_breakpoints = ArrayVec::new();
-        for bp in &*inner.hw_breakpoints.lock() {
-            let Some(bp) = bp else {
-                continue;
-            };
-            hw_breakpoints.push(bp.addr);
-        }
-
-        let mut hw_watchpoints = ArrayVec::new();
-        for wp in &*inner.hw_watchpoints.lock() {
-            let Some(wp) = wp else {
-                continue;
-            };
-            hw_watchpoints.push(wp.addr);
-        }
-
-        let mut sw_breakpoints = ArrayVec::new();
-        for sw in &*inner.sw_breakpoints.lock() {
-            let Some(sw) = sw else {
-                continue;
-            };
-            sw_breakpoints.push(sw.addr);
-        }
-
-        DumpState {
-            pid: inner.pid(),
-            hw_breakpoints,
-            hw_watchpoints,
-            sw_breakpoints,
-        }
-    }
-}
-
-pub struct DumpState {
-    pub pid: Option<SceUID>,
-    pub hw_breakpoints: ArrayVec<u32, 6>,
-    pub hw_watchpoints: ArrayVec<u32, 3>,
-    pub sw_breakpoints: ArrayVec<u32, 16>,
 }
 
 impl Drop for GdbSession {

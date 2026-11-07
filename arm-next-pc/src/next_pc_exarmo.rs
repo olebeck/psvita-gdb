@@ -25,10 +25,10 @@ pub fn next_pc<Mem: MemReader>(regs: &RegContext, mem: &Mem) -> Result<(u32, boo
         }
     }
 
-    if let Some(cond) = find_cond(ops) {
-        if !eval_cond(cond, regs) {
-            return Ok(fallthrough);
-        }
+    if let Some(cond) = find_cond(ops)
+        && !eval_cond(cond, regs)
+    {
+        return Ok(fallthrough);
     }
 
     let branch = insn.at(addr as u64).branch();
@@ -243,10 +243,15 @@ fn load_multiple_target<Mem: MemReader>(
     let before_pc = (list.mask & 0x7fff).count_ones();
     let total = list.mask.count_ones();
     let pc_address = match amode {
-        Amode::Ia => base.wrapping_add(before_pc * 4),
-        Amode::Ib => base.wrapping_add((before_pc + 1) * 4),
-        Amode::Da => base.wrapping_sub((total - 1 - before_pc) * 4),
-        Amode::Db => base.wrapping_sub((total - before_pc) * 4),
+        Amode::Ia => base.wrapping_add(before_pc.wrapping_mul(4)),
+        Amode::Ib => base.wrapping_add(before_pc.wrapping_add(1).wrapping_mul(4)),
+        Amode::Da => base.wrapping_sub(
+            total
+                .wrapping_sub(1)
+                .wrapping_sub(before_pc)
+                .wrapping_mul(4),
+        ),
+        Amode::Db => base.wrapping_sub(total.wrapping_sub(before_pc).wrapping_mul(4)),
     };
 
     let target = mem.read_u32(pc_address)?;
@@ -283,7 +288,8 @@ fn rfe_target<Mem: MemReader>(
 }
 
 fn eval_alu(insn: &Instruction, ops: &[Operand], regs: &RegContext, addr: u32) -> u32 {
-    let carry = u32::from(regs.cpsr & (1 << 29) != 0);
+    let carry = regs.cpsr & (1 << 29) != 0;
+    let (carry, not_carry) = (u32::from(carry), u32::from(!carry));
 
     match insn.mnemonic() {
         Mnemonic::Mov | Mnemonic::Movs => operand_value(arg(ops, 1), regs, addr),
@@ -303,12 +309,12 @@ fn eval_alu(insn: &Instruction, ops: &[Operand], regs: &RegContext, addr: u32) -
             .wrapping_sub(operand_value(arg(ops, 2), regs, addr)),
         Mnemonic::Sbc | Mnemonic::Sbcs => operand_value(arg(ops, 1), regs, addr)
             .wrapping_sub(operand_value(arg(ops, 2), regs, addr))
-            .wrapping_sub(1 - carry),
+            .wrapping_sub(not_carry),
         Mnemonic::Rsb | Mnemonic::Rsbs => operand_value(arg(ops, 2), regs, addr)
             .wrapping_sub(operand_value(arg(ops, 1), regs, addr)),
         Mnemonic::Rsc | Mnemonic::Rscs => operand_value(arg(ops, 2), regs, addr)
             .wrapping_sub(operand_value(arg(ops, 1), regs, addr))
-            .wrapping_sub(1 - carry),
+            .wrapping_sub(not_carry),
         Mnemonic::And | Mnemonic::Ands => {
             operand_value(arg(ops, 1), regs, addr) & operand_value(arg(ops, 2), regs, addr)
         }
@@ -474,7 +480,7 @@ fn arg(ops: &[Operand], mut index: usize) -> Option<Operand> {
         if index == 0 {
             return Some(operand);
         }
-        index -= 1;
+        index = index.wrapping_sub(1);
     }
     None
 }

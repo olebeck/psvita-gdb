@@ -13,41 +13,40 @@ impl Arch for Armv7 {
 
     fn target_description_xml() -> Option<&'static str> {
         Some(
-            r#"
-<?xml version="1.0"?>
+            r#"<?xml version="1.0"?>
 <!DOCTYPE target SYSTEM "gdb-target.dtd">
 <target version="1.0">
     <architecture>armv7</architecture>
     <feature name="org.gnu.gdb.arm.core">
-        <reg name="r0"  bitsize="32" type="uint32"/>
-        <reg name="r1"  bitsize="32" type="uint32"/>
-        <reg name="r2"  bitsize="32" type="uint32"/>
-        <reg name="r3"  bitsize="32" type="uint32"/>
-        <reg name="r4"  bitsize="32" type="uint32"/>
-        <reg name="r5"  bitsize="32" type="uint32"/>
-        <reg name="r6"  bitsize="32" type="uint32"/>
-        <reg name="r7"  bitsize="32" type="uint32"/>
-        <reg name="r8"  bitsize="32" type="uint32"/>
-        <reg name="r9"  bitsize="32" type="uint32"/>
+        <reg name="r0" bitsize="32" type="uint32"/>
+        <reg name="r1" bitsize="32" type="uint32"/>
+        <reg name="r2" bitsize="32" type="uint32"/>
+        <reg name="r3" bitsize="32" type="uint32"/>
+        <reg name="r4" bitsize="32" type="uint32"/>
+        <reg name="r5" bitsize="32" type="uint32"/>
+        <reg name="r6" bitsize="32" type="uint32"/>
+        <reg name="r7" bitsize="32" type="uint32"/>
+        <reg name="r8" bitsize="32" type="uint32"/>
+        <reg name="r9" bitsize="32" type="uint32"/>
         <reg name="r10" bitsize="32" type="uint32"/>
         <reg name="r11" bitsize="32" type="uint32"/>
         <reg name="r12" bitsize="32" type="uint32"/>
-        <reg name="sp"  bitsize="32" type="data_ptr"/>
-        <reg name="lr"  bitsize="32" type="uint32"/>
-        <reg name="pc"  bitsize="32" type="code_ptr"/>
-        <reg name="cpsr" bitsize="32" type="uint32"/>
+        <reg name="sp" bitsize="32" type="data_ptr"/>
+        <reg name="lr" bitsize="32" type="uint32"/>
+        <reg name="pc" bitsize="32" type="code_ptr"/>
+        <reg name="cpsr" bitsize="32" regnum="25"/>
     </feature>
     <feature name="org.gnu.gdb.arm.vfp">
-        <reg name="d0"  bitsize="64" type="ieee_double"/>
-        <reg name="d1"  bitsize="64" type="ieee_double"/>
-        <reg name="d2"  bitsize="64" type="ieee_double"/>
-        <reg name="d3"  bitsize="64" type="ieee_double"/>
-        <reg name="d4"  bitsize="64" type="ieee_double"/>
-        <reg name="d5"  bitsize="64" type="ieee_double"/>
-        <reg name="d6"  bitsize="64" type="ieee_double"/>
-        <reg name="d7"  bitsize="64" type="ieee_double"/>
-        <reg name="d8"  bitsize="64" type="ieee_double"/>
-        <reg name="d9"  bitsize="64" type="ieee_double"/>
+        <reg name="d0" bitsize="64" type="ieee_double"/>
+        <reg name="d1" bitsize="64" type="ieee_double"/>
+        <reg name="d2" bitsize="64" type="ieee_double"/>
+        <reg name="d3" bitsize="64" type="ieee_double"/>
+        <reg name="d4" bitsize="64" type="ieee_double"/>
+        <reg name="d5" bitsize="64" type="ieee_double"/>
+        <reg name="d6" bitsize="64" type="ieee_double"/>
+        <reg name="d7" bitsize="64" type="ieee_double"/>
+        <reg name="d8" bitsize="64" type="ieee_double"/>
+        <reg name="d9" bitsize="64" type="ieee_double"/>
         <reg name="d10" bitsize="64" type="ieee_double"/>
         <reg name="d11" bitsize="64" type="ieee_double"/>
         <reg name="d12" bitsize="64" type="ieee_double"/>
@@ -70,9 +69,8 @@ impl Arch for Armv7 {
         <reg name="d29" bitsize="64" type="ieee_double"/>
         <reg name="d30" bitsize="64" type="ieee_double"/>
         <reg name="d31" bitsize="64" type="ieee_double"/>
-        <reg name="fpscr" bitsize="32" type="uint32"/>
+        <reg name="fpscr" bitsize="32" type="int" group="float"/>
     </feature>
-    <feature name="org.gnu.gdb.arm.neon"/>
 </target>
 "#,
         )
@@ -107,7 +105,7 @@ impl RegId for Armv7RegId {
             14 => Self::Lr,
             15 => Self::Pc,
             16 => Self::Cpsr,
-            17..=48 => Self::Dpr((id - 17) as u8),
+            17..=48 => Self::Dpr(id.wrapping_sub(17) as u8),
             49 => Self::Fpscr,
             _ => return None,
         };
@@ -172,7 +170,7 @@ impl Registers for Armv7Regs {
     }
 
     fn gdb_deserialize(&mut self, mut bytes: &[u8]) -> Result<(), ()> {
-        const EXPECTED_LEN: usize = 17 * 4 + 32 * 8 + 1 * 4;
+        const EXPECTED_LEN: usize = 17 * 4 + 32 * 8 + 4;
 
         if bytes.len() != EXPECTED_LEN {
             return Err(());

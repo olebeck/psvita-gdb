@@ -87,8 +87,10 @@ impl<'a> StreamWriter<'a> {
         if self.written >= self.buf.len() {
             return None;
         }
-        self.buf[self.written] = 0;
-        CStr::from_bytes_with_nul(&self.buf[..=self.written]).ok()
+        let term = self.buf.get_mut(self.written)?;
+        *term = 0;
+        let slice = self.buf.get(..=self.written)?;
+        CStr::from_bytes_with_nul(slice).ok()
     }
 }
 
@@ -96,13 +98,13 @@ impl<'a> Write for StreamWriter<'a> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for &byte in s.as_bytes() {
             if self.skip > 0 {
-                self.skip -= 1;
+                self.skip = self.skip.saturating_sub(1);
                 continue;
             }
             match self.buf.get_mut(self.written) {
                 Some(slot) => {
                     *slot = byte;
-                    self.written += 1;
+                    self.written = self.written.wrapping_add(1);
                 }
                 None => return Err(core::fmt::Error),
             }
@@ -125,11 +127,16 @@ impl ArgvWriter {
     }
 
     fn append(&mut self, data: &[u8]) -> bool {
-        if self.offset + data.len() + 3 > self.buf.len() {
+        if self.offset.saturating_add(data.len()).saturating_add(3) > self.buf.len() {
             return false;
         }
-        self.buf[self.offset..self.offset + data.len()].copy_from_slice(data);
-        self.offset += data.len() + 1;
+        let Some(dest_slice) = self.buf.get_mut(self.offset..) else {
+            return false;
+        };
+        for (dest, &src) in dest_slice.iter_mut().zip(data.iter()) {
+            *dest = src;
+        }
+        self.offset = self.offset.wrapping_add(data.len()).wrapping_add(1);
         true
     }
 
@@ -142,7 +149,11 @@ impl ArgvWriter {
     }
 
     pub fn to_slice(&self) -> &[u8] {
-        &self.buf[..(self.offset + 1).min(self.buf.len())]
+        let end_idx = self.offset.wrapping_add(1).min(self.buf.len());
+        match self.buf.get(..end_idx) {
+            Some(slice) => slice,
+            None => &[],
+        }
     }
 }
 
@@ -228,56 +239,26 @@ pub fn get_thread_context_info() -> (SceUID, SceUID) {
     (thread_ctx.process_id, thread_ctx.thread_id)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct TitleId([u8; 16]);
-
-impl TitleId {
-    pub fn new() -> Self {
-        Self([0u8; 16])
-    }
-    const fn new_static(value: &str) -> Self {
-        if value.len() > 16 {
-            panic!("TitleId must be at most 16 bytes");
-        }
-        let mut buf = [0u8; 16];
-        let bytes = value.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            buf[i] = bytes[i];
-            i += 1;
-        }
-        Self(buf)
-    }
-    pub fn as_str(&self) -> &str {
-        let len = self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len());
-        core::str::from_utf8(&self.0[..len]).unwrap_or("")
-    }
-}
-
-impl PartialEq<&str> for TitleId {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl Display for TitleId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-pub fn get_process_titleid(pid: SceUID) -> Option<TitleId> {
+pub fn get_process_titleid(pid: SceUID) -> Option<[i8; 16]> {
+    let mut buf = [0i8; 16];
     if pid == 0x10005 {
-        return Some(TitleId::new_static("kernel"));
+        for (b, val) in buf.iter_mut().zip("kernel".as_bytes()) {
+            *b = *val as _;
+        }
+        return Some(buf);
     }
-    let mut buf = TitleId::new();
     sce_call!(ksceKernelSysrootGetProcessTitleId(
         pid,
-        buf.0.as_mut_ptr() as _,
-        buf.0.len() as _
+        buf.as_mut_ptr() as _,
+        buf.len() as _
     ))
     .ok();
-    Some(buf).filter(|t| !t.as_str().is_empty())
+    if let Some(val) = buf.first() {
+        if *val == 0 {
+            return None;
+        }
+    }
+    Some(buf)
 }
 
 pub const PROCESS_HALT_STATUS: i32 = 0x1C;
@@ -287,14 +268,14 @@ pub fn halt_process(pid: SceUID) -> Result<SceUID, SceError> {
     let status = get_process_status(pid)?;
     if status & PROCESS_STATUS_SUSPENDED == 0 {
         sce_call!(ksceKernelSuspendProcess(pid, PROCESS_HALT_STATUS))?;
-        let mut waited = 0;
+        let mut waited: usize = 0;
         while waited < 1000 {
             let s = get_process_status(pid)?;
             if s & PROCESS_STATUS_SUSPENDED != 0 {
                 break;
             }
             delay_thread(1000);
-            waited += 1;
+            waited = waited.wrapping_add(1);
         }
     }
     sce_call!(ksceKernelGetProcessMainThread(pid))
@@ -318,7 +299,7 @@ pub fn map_paddr(name: &CStr, paddr: u32, size: usize) -> Result<(SceUID, *mut c
     let mut opt = SceKernelAllocMemBlockKernelOpt {
         size: size_of::<SceKernelAllocMemBlockKernelOpt>() as u32,
         attr: SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR,
-        paddr: paddr,
+        paddr,
         ..unsafe { zeroed() }
     };
     let uid = sce_call!(ksceKernelAllocMemBlock(
@@ -363,11 +344,16 @@ pub fn phys_dump(addr: u32, cb: impl FnOnce(u32, &[u32])) -> Result<(), SceError
     Ok(())
 }
 
-pub fn name_to_str(name: &[i8]) -> &str {
-    let name_len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-    unsafe {
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(name.as_ptr() as _, name_len))
+pub fn name_to_str(name: &[i8]) -> Option<&str> {
+    let name = unsafe { core::slice::from_raw_parts(name.as_ptr() as _, name.len()) };
+    CStr::from_bytes_until_nul(name).ok()?.to_str().ok()
+}
+
+pub fn str_to_buf(buf: &mut [u8], name: &str, offset: usize) -> usize {
+    for (b, val) in buf.iter_mut().zip(name.as_bytes().iter().skip(offset)) {
+        *b = *val;
     }
+    buf.len().min(name.len().saturating_sub(offset))
 }
 
 struct ProcessContextGuard {
@@ -390,7 +376,7 @@ impl ProcessContextGuard {
 
 impl Drop for ProcessContextGuard {
     fn drop(&mut self) {
-        let _ = unsafe { ksceKernelProcessSwitchContext(&mut self.prev, null_mut()) };
+        let _ = unsafe { ksceKernelProcessSwitchContext(&self.prev, null_mut()) };
         let _ = unsafe { ksceKernelCpuResumeIntr(self.intr) };
     }
 }

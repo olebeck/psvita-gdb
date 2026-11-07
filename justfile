@@ -17,6 +17,9 @@ release:
 bloat:
     cd {{project}} && cargo +nightly bloat -Zbuild-std=core
 
+clippy:
+    cargo +nightly clippy -Zbuild-std=core
+
 clean:
     cargo clean
 
