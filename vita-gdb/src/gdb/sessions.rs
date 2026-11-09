@@ -9,11 +9,17 @@ use vitasdk_sys::SceUID;
 
 use gdbstub::target::ext::breakpoints::WatchKind;
 
-use crate::kernel::{event_flag::EventFlagRef, mpsc::MpscRing, spinlock::Spinlock};
+use crate::kernel::{
+    event_flag::EventFlagRef,
+    ffi::{stai_is_loaded, staiCowRelease, staiCowWrite},
+    mpsc::MpscRing,
+    spinlock::Spinlock,
+    utils::read_user_process,
+};
 use crate::{
     cp14::is_debug_enabled,
     kernel::{
-        ffi::{ksceKernelCopyFromUserProc, sceKernelSetPHBP, sceKernelSetPHWP},
+        ffi::{sceKernelSetPHBP, sceKernelSetPHWP},
         utils::{SceError, write_user_text},
     },
 };
@@ -67,17 +73,33 @@ pub struct HwBreakpoint {
 }
 
 #[derive(Debug, Clone)]
-pub struct SwBreakpoint {
-    addr: u32,
-    orig: [u8; 4],
-    patch_len: usize,
+pub enum SwBreakpoint {
+    Claimed {
+        addr: u32,
+    },
+    Patched {
+        addr: u32,
+        orig: [u8; 4],
+        len: usize,
+    },
+    Shared {
+        addr: u32,
+        uid: SceUID,
+    },
+}
+impl SwBreakpoint {
+    pub fn addr(&self) -> u32 {
+        match *self {
+            Self::Claimed { addr } | Self::Patched { addr, .. } | Self::Shared { addr, .. } => addr,
+        }
+    }
 }
 
 pub struct GdbSessionInner {
     pid: AtomicI32,
     evflag: UnsafeCell<Option<EventFlagRef>>,
 
-    hw_breakpoints: Spinlock<[Option<HwBreakpoint>; 6]>,
+    hw_breakpoints: Spinlock<[Option<HwBreakpoint>; 5]>,
     hw_watchpoints: Spinlock<[Option<HwWatchpoint>; 3]>,
     sw_breakpoints: Spinlock<[Option<SwBreakpoint>; 16]>,
     step: Spinlock<Option<(SceUID, u32)>>,
@@ -94,7 +116,7 @@ impl GdbSessionInner {
             pid: AtomicI32::new(PID_UNUSED),
             evflag: UnsafeCell::new(None),
 
-            hw_breakpoints: Spinlock::new([const { None }; 6]),
+            hw_breakpoints: Spinlock::new([const { None }; 5]),
             hw_watchpoints: Spinlock::new([const { None }; 3]),
             sw_breakpoints: Spinlock::new([const { None }; 16]),
             step: Spinlock::new(None),
@@ -288,74 +310,10 @@ impl GdbSessionInner {
 
     pub fn set_sw_breakpoint(&self, addr: u32, kind: ArmBreakpointKind) -> bool {
         println!("set_sw_breakpoint addr={addr:x}");
-        let pid = self.pid();
-
-        if is_shared_address(addr) {
-            println!("cant sw break in shared libraries (yet?)");
-            return false;
-        }
-
-        let patch_len = match kind {
-            ArmBreakpointKind::Thumb16 => 2,
-            _ => 4,
-        };
-
-        let mut orig = [0u8; 4];
-        if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
-            pid,
-            orig.as_mut_ptr() as _,
-            addr as _,
-            patch_len
-        )) {
-            println!("set_sw_breakpoint: {err}");
-            return false;
-        }
-        println!("orig={orig:?}");
-
-        let mut claimed: Option<usize> = None;
-        {
-            let mut sw = self.sw_breakpoints.lock();
-            for slot in sw.iter_mut() {
-                if slot.as_ref().is_some_and(|slot| slot.addr == addr) {
-                    return true;
-                }
-            }
-            for (idx, slot) in sw.iter_mut().enumerate() {
-                if slot.is_none() {
-                    *slot = Some(SwBreakpoint {
-                        addr,
-                        orig,
-                        patch_len,
-                    });
-                    claimed = Some(idx);
-                    break;
-                }
-            }
-        }
-        let Some(claimed) = claimed else {
-            return false;
-        };
-
-        let patched: &[u8] = match kind {
-            gdbstub_arch::arm::ArmBreakpointKind::Thumb16 => {
-                // bkpt #0: 0xBE00
-                &[0x00u8, 0xbeu8]
-            }
-            _ => {
-                // bkpt #0: 0xE1200070
-                &[0x70u8, 0x00u8, 0x20u8, 0xE1u8]
-            }
-        };
-        println!("patched={patched:?}");
-
-        match write_user_text(pid, addr, patched) {
-            Ok(_) => true,
+        match self.try_set_sw_breakpoint(addr, kind) {
+            Ok(()) => true,
             Err(err) => {
                 println!("set_sw_breakpoint: {err}");
-                let mut sw_bps = self.sw_breakpoints.lock();
-                if let Some(sw) = sw_bps.get_mut(claimed) {
-                    *sw = None;
-                }
                 false
             }
         }
@@ -363,38 +321,114 @@ impl GdbSessionInner {
 
     pub fn clear_sw_breakpoint(&self, addr: u32) -> bool {
         println!("clear_sw_breakpoint addr={addr:x}");
-        let pid = self.pid();
-        let mut sws = self.sw_breakpoints.lock();
-        for slot in sws.iter_mut() {
-            if slot.as_ref().is_some_and(|slot| slot.addr == addr) {
-                if let Err(err) = self.restore_sw_slot(pid, slot) {
-                    println!("restore_sw_slot: {err}");
-                    return false;
-                }
-                *slot = None;
-                return true;
+        match self.try_clear_sw_breakpoint(addr) {
+            Ok(found) => found,
+            Err(err) => {
+                println!("clear_sw_breakpoint: {err}");
+                false
             }
         }
-        false
     }
 
-    pub fn restore_sw_slot(
+    fn try_set_sw_breakpoint(&self, addr: u32, kind: ArmBreakpointKind) -> Result<(), SceError> {
+        let Some(idx) = self.claim_sw_slot(addr) else {
+            return Ok(());
+        };
+        let result = self.install_sw_breakpoint(self.pid(), addr, kind);
+        let mut slots = self.sw_breakpoints.lock();
+        match result {
+            Ok(bp) => {
+                slots[idx] = Some(bp);
+                Ok(())
+            }
+            Err(err) => {
+                slots[idx] = None;
+                Err(err)
+            }
+        }
+    }
+
+    fn claim_sw_slot(&self, addr: u32) -> Option<usize> {
+        let mut slots = self.sw_breakpoints.lock();
+        if slots.iter().flatten().any(|bp| bp.addr() == addr) {
+            return None;
+        }
+        if let Some(idx) = slots.iter().position(Option::is_none) {
+            slots[idx] = Some(SwBreakpoint::Claimed { addr });
+            return Some(idx);
+        }
+        None
+    }
+
+    fn install_sw_breakpoint(
         &self,
         pid: SceUID,
-        slot: &mut Option<SwBreakpoint>,
-    ) -> Result<(), SceError> {
-        let Some(slot) = slot.take() else {
-            return Ok(());
+        addr: u32,
+        kind: ArmBreakpointKind,
+    ) -> Result<SwBreakpoint, SceError> {
+        let patch = bkpt_insn(&kind);
+
+        if is_shared_address(addr) {
+            if !stai_is_loaded() {
+                return Err(SceError::new(
+                    -1,
+                    "cant break in shared modules without stai",
+                ));
+            }
+            let uid = sce_call!(staiCowWrite(pid, addr, patch.as_ptr() as _, patch.len()))?;
+            return Ok(SwBreakpoint::Shared { addr, uid });
+        }
+
+        let len = match kind {
+            ArmBreakpointKind::Arm32 | ArmBreakpointKind::Thumb32 => 4,
+            ArmBreakpointKind::Thumb16 => 2,
         };
-        let Some(orig) = slot.orig.get(0..slot.patch_len) else {
-            return Ok(());
+        let mut orig = [0u8; 4];
+        read_user_process(pid, addr, &mut orig[..len])?;
+        write_user_text(pid, addr, patch)?;
+        Ok(SwBreakpoint::Patched { addr, orig, len })
+    }
+
+    fn try_clear_sw_breakpoint(&self, addr: u32) -> Result<bool, SceError> {
+        let mut slots = self.sw_breakpoints.lock();
+
+        let Some(idx) = slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|bp| bp.addr() == addr))
+        else {
+            return Ok(false);
         };
-        write_user_text(pid, slot.addr, orig)?;
-        Ok(())
+
+        if let Some(bp) = &slots[idx] {
+            self.restore_sw_breakpoint(self.pid(), bp)?;
+        }
+        slots[idx] = None;
+        Ok(true)
+    }
+
+    pub fn restore_sw_breakpoint(&self, pid: SceUID, bp: &SwBreakpoint) -> Result<(), SceError> {
+        match *bp {
+            SwBreakpoint::Claimed { .. } => Ok(()),
+            SwBreakpoint::Patched { addr, orig, len } => write_user_text(pid, addr, &orig[..len]),
+            SwBreakpoint::Shared { uid, .. } => sce_call!(staiCowRelease(uid)).map(drop),
+        }
     }
 
     pub fn evflag(&self) -> Option<EventFlagRef> {
         unsafe { *self.evflag.get() }
+    }
+}
+
+fn bkpt_insn(kind: &ArmBreakpointKind) -> &'static [u8] {
+    match kind {
+        ArmBreakpointKind::Thumb16 | ArmBreakpointKind::Thumb32 => {
+            // bkpt #0: 0xBE00
+            &[0x00u8, 0xbeu8]
+        }
+        ArmBreakpointKind::Arm32 => {
+            // bkpt #0: 0xE1200070
+            &[0x70u8, 0x00u8, 0x20u8, 0xE1u8]
+        }
     }
 }
 
@@ -517,8 +551,8 @@ impl GdbSession {
 
         let mut sws = inner.sw_breakpoints.lock();
         for slot in sws.iter_mut() {
-            if slot.is_some() {
-                let _ = inner.restore_sw_slot(pid, slot);
+            if let Some(slot) = slot {
+                let _ = inner.restore_sw_breakpoint(pid, slot);
             }
         }
     }

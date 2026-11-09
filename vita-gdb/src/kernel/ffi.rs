@@ -2,7 +2,7 @@ use core::ffi::c_void;
 
 use vitasdk_sys::{
     SceArmCpuRegisters, SceClass, SceExcpHandlingCode, SceExcpKind, SceExcpmgrExceptionContext,
-    SceKernelIntrStatus, SceKernelModuleInfo, SceKernelThreadContextInfo, SceUID,
+    SceKernelModuleInfo, SceKernelThreadContextInfo, SceUID,
 };
 
 fn stub_is_invalid(ptr: *const c_void) -> bool {
@@ -147,17 +147,6 @@ pub fn init_stubs() {
         }
     }
 }
-#[link(name = "SceSysmemForDriver_stub", kind = "static")]
-unsafe extern "C" {
-    pub unsafe fn ksceKernelCopyFromUserProc(
-        pid: SceUID,
-        dst: *mut c_void,
-        src: *const c_void,
-        len: usize,
-    ) -> i32;
-    pub unsafe fn ksceKernelCpuSuspendIntr() -> SceKernelIntrStatus;
-    pub unsafe fn ksceKernelCpuResumeIntr(prev_state: SceKernelIntrStatus) -> SceKernelIntrStatus;
-}
 
 libstub_ver!(SceSysmemForKernel, 0x63A519E5, 0x02451F0F,
     //(0x30931572, 0x2995558D, ksceKernelCopyToUserProcTextDomain(pid: SceUID, dst: *mut c_void, src: *const c_void, len: usize) -> i32),
@@ -219,4 +208,16 @@ vitastub!(SKPLForKernel, spl_exec_code, 0x18, 0x9fce5cbf, 0x4b856e73);
 
 pub fn spl_is_loaded() -> bool {
     !stub_is_invalid(spl_exec_code as _)
+}
+
+// staiForKernel
+unsafe extern "C" {
+    pub unsafe fn staiCowWrite(pid: SceUID, addr: u32, data: *const c_void, size: usize) -> i32;
+    pub unsafe fn staiCowRelease(uid: SceUID) -> i32;
+}
+vitastub!(staiForKernel, staiCowWrite, 0x18, 0xFF0B8551, 0xFB9158E4);
+vitastub!(staiForKernel, staiCowRelease, 0x18, 0xFF0B8551, 0x1138785D);
+
+pub fn stai_is_loaded() -> bool {
+    !stub_is_invalid(staiCowWrite as _)
 }

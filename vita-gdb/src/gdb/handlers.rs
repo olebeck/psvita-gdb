@@ -14,9 +14,9 @@ use vitasdk_sys::{
 use crate::cp14::enable_debug;
 use crate::gdb::exception_report;
 use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, find_session_for_pid};
-use crate::kernel::utils::{PROCESS_HALT_STATUS, SceError};
+use crate::kernel::utils::{PROCESS_HALT_STATUS, SceError, read_user_process};
 use crate::kernel::{
-    ffi::{ksceExcpmgrRegisterHandler, ksceKernelCopyFromUserProc, ksceKernelSuspendProcess},
+    ffi::{ksceExcpmgrRegisterHandler, ksceKernelSuspendProcess},
     utils::get_thread_context_info,
 };
 use crate::{println, sce_call};
@@ -206,12 +206,7 @@ fn handle_break(
     let thumb = is_thumb(context);
     let read_len = if thumb { 2 } else { 4 };
     let mut insn = [0u8; 4];
-    if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
-        pid,
-        insn.as_mut_ptr() as _,
-        fault_addr as _,
-        read_len
-    )) {
+    if let Err(err) = read_user_process(pid, fault_addr as _, &mut insn[..read_len]) {
         println!("handle_break: {err}");
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     }

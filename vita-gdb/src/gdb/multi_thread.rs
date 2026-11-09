@@ -30,12 +30,12 @@ use crate::{
     },
     kernel::{
         ffi::{
-            ksceKernelCopyFromUserProc, ksceKernelResumeProcess, ksceKernelSetThreadCpuRegisters,
+            ksceKernelResumeProcess, ksceKernelSetThreadCpuRegisters,
             ksceKernelSetVfpRegisterForDebugger,
         },
         utils::{
             PROCESS_STATUS_SUSPENDED, SceError, get_process_status, get_thread_ids,
-            get_thread_info, name_to_str, str_to_buf, write_user_text,
+            get_thread_info, name_to_str, read_user_process, str_to_buf, write_user_text,
         },
     },
     println, sce_call,
@@ -159,7 +159,6 @@ impl MultiThreadBase for VitaTarget {
             return Err(TargetError::NonFatal);
         }
 
-        /* breaks
         if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(
             tid,
             &regs.d as *const _ as _
@@ -167,7 +166,6 @@ impl MultiThreadBase for VitaTarget {
             println!("write_registers {err} tid={tid}");
             return Err(TargetError::NonFatal);
         }
-        */
 
         Ok(())
     }
@@ -181,13 +179,7 @@ impl MultiThreadBase for VitaTarget {
         let Some(pid) = self.pid() else {
             return Err(TargetError::NonFatal);
         };
-
-        if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
-            pid,
-            data.as_mut_ptr() as _,
-            start_addr as _,
-            data.len() as _
-        )) {
+        if let Err(err) = read_user_process(pid, start_addr, data) {
             println!("read_addrs {err} addr=0x{start_addr:x}");
             return Err(TargetError::NonFatal);
         }
@@ -245,12 +237,7 @@ impl MultiThreadBase for VitaTarget {
 impl MemReader for VitaTarget {
     fn read(&self, addr: usize, buf: &mut [u8]) -> Option<()> {
         let pid = self.pid()?;
-        if let Err(err) = sce_call!(ksceKernelCopyFromUserProc(
-            pid,
-            buf.as_mut_ptr() as _,
-            addr as _,
-            buf.len() as _
-        )) {
+        if let Err(err) = read_user_process(pid, addr as _, buf) {
             println!("read_addrs {err} addr=0x{addr:x}");
             return None;
         }

@@ -1,7 +1,7 @@
 use core::panic::PanicInfo;
 
 use crate::{
-    kernel::syscon::{self, SYSCON_COLD_RESET, syscon_cmd},
+    kernel::syscon::{SYSCON_COLD_RESET, syscon_cmd},
     println,
 };
 

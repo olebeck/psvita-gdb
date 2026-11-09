@@ -9,17 +9,17 @@ use vitasdk_sys::{
     SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR, SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_IO_NC_RW, SceClass,
     SceKernelAllocMemBlockKernelOpt, SceKernelIntrStatus, SceKernelMemBlockInfoEx,
     SceKernelModuleInfo, SceKernelProcessContext, SceKernelThreadContextInfo, SceKernelThreadInfo,
-    SceUID, ksceKernelAllocMemBlock, ksceKernelChangeThreadSuspendStatus, ksceKernelFreeMemBlock,
-    ksceKernelGetMemBlockBase, ksceKernelGetMemBlockInfo, ksceKernelGetProcessStatus,
-    ksceKernelGetThreadIdList, ksceKernelGetThreadInfo, ksceKernelProcessGetContext,
-    ksceKernelProcessSwitchContext,
+    SceUID, ksceKernelAllocMemBlock, ksceKernelChangeThreadSuspendStatus,
+    ksceKernelCopyFromUserProc, ksceKernelCpuResumeIntr, ksceKernelCpuSuspendIntr,
+    ksceKernelFreeMemBlock, ksceKernelGetMemBlockBase, ksceKernelGetMemBlockInfo,
+    ksceKernelGetProcessStatus, ksceKernelGetThreadIdList, ksceKernelGetThreadInfo,
+    ksceKernelProcessGetContext, ksceKernelProcessSwitchContext,
 };
 
 use crate::kernel::{
     ffi::{
-        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelCpuResumeIntr,
-        ksceKernelCpuSuspendIntr, ksceKernelGetModuleInfo, ksceKernelGetModuleList,
-        ksceKernelGetProcessMainThread, ksceKernelGetThreadContextInfo,
+        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelGetModuleInfo,
+        ksceKernelGetModuleList, ksceKernelGetProcessMainThread, ksceKernelGetThreadContextInfo,
         ksceKernelGetUIDMemBlockClass, ksceKernelGetUIDProcessClass,
         ksceKernelL1IcacheInvalidateEntireAllCore, ksceKernelResumeProcess,
         ksceKernelSuspendProcess, ksceKernelSysrootGetProcessTitleId,
@@ -390,5 +390,15 @@ pub fn write_user_text(pid: SceUID, dst: u32, buf: &[u8]) -> Result<(), SceError
     ))?;
     unsafe { ksceKernelL1IcacheInvalidateEntireAllCore() };
     drop(ctx);
+    Ok(())
+}
+
+pub fn read_user_process(pid: SceUID, addr: u32, data: &mut [u8]) -> Result<(), SceError> {
+    sce_call!(ksceKernelCopyFromUserProc(
+        pid,
+        data.as_mut_ptr() as _,
+        addr as _,
+        data.len() as _
+    ))?;
     Ok(())
 }
