@@ -373,9 +373,7 @@ impl VitaTarget {
         let Some(session) = self.session.as_ref() else {
             return Ok(());
         };
-        session.inner().set_sw_breakpoint(addr, kind);
-        session.set_step(tid, addr)?;
-        Ok(())
+        session.set_step(tid, addr, kind)
     }
 }
 

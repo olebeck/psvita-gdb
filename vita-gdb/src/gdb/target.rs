@@ -542,12 +542,12 @@ impl HwBreakpoint for VitaTarget {
     fn add_hw_breakpoint(
         &mut self,
         addr: u32,
-        _kind: ArmBreakpointKind,
+        kind: ArmBreakpointKind,
     ) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
-        match session.set_hw_breakpoint(addr) {
+        match session.set_hw_breakpoint(addr, kind) {
             Ok(ok) => Ok(ok),
             Err(err) => {
                 println!("set_hw_breakpoint: {err}");

@@ -19,7 +19,7 @@ use crate::kernel::{
 use crate::{
     cp14::is_debug_enabled,
     kernel::{
-        ffi::{sceKernelSetPHBP, sceKernelSetPHWP},
+        ffi::{ksceKernelSetPHBP, ksceKernelSetPHWP, ksceKernelSetTHBP},
         utils::{SceError, write_user_text},
     },
 };
@@ -95,6 +95,27 @@ impl SwBreakpoint {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum StepBreakpoint {
+    Hw { tid: SceUID, addr: u32 },
+    Sw { tid: SceUID, bp: SwBreakpoint },
+}
+
+impl StepBreakpoint {
+    pub fn tid(&self) -> SceUID {
+        match *self {
+            Self::Hw { tid, .. } | Self::Sw { tid, .. } => tid,
+        }
+    }
+
+    pub fn addr(&self) -> u32 {
+        match self {
+            Self::Hw { addr, .. } => *addr,
+            Self::Sw { bp, .. } => bp.addr(),
+        }
+    }
+}
+
 pub struct GdbSessionInner {
     pid: AtomicI32,
     evflag: UnsafeCell<Option<EventFlagRef>>,
@@ -102,7 +123,7 @@ pub struct GdbSessionInner {
     hw_breakpoints: Spinlock<[Option<HwBreakpoint>; 5]>,
     hw_watchpoints: Spinlock<[Option<HwWatchpoint>; 3]>,
     sw_breakpoints: Spinlock<[Option<SwBreakpoint>; 16]>,
-    step: Spinlock<Option<(SceUID, u32)>>,
+    step: Spinlock<Option<StepBreakpoint>>,
     step_result: Spinlock<Option<SceUID>>,
     exited: AtomicBool,
     exceptions: MpscRing<ExceptionEvent, 8>,
@@ -178,22 +199,55 @@ impl GdbSessionInner {
         self.exited.swap(false, Ordering::Release)
     }
 
-    pub fn set_step(&self, tid: SceUID, addr: u32) {
-        *self.step.lock() = Some((tid, addr))
+    pub fn set_step(
+        &self,
+        tid: SceUID,
+        addr: u32,
+        kind: ArmBreakpointKind,
+    ) -> Result<(), SceError> {
+        self.clear_step_breakpoint()?;
+
+        let step = if is_debug_enabled() {
+            let (value, control) = bp_value_control(addr, kind);
+            sce_call!(ksceKernelSetTHBP(tid, 5, value, control))?;
+            StepBreakpoint::Hw { tid, addr }
+        } else {
+            let bp = self.install_sw_breakpoint(self.pid(), addr, kind)?;
+            StepBreakpoint::Sw { tid, bp }
+        };
+        *self.step.lock() = Some(step);
+        Ok(())
     }
 
-    pub fn is_step(&self, addr: u32) -> bool {
-        let Some((_step_tid, step_addr)) = *self.step.lock() else {
-            return false;
+    fn clear_step_breakpoint(&self) -> Result<(), SceError> {
+        let Some(step) = self.step.lock().take() else {
+            return Ok(());
         };
-        step_addr == addr
+        self.restore_step_breakpoint(step)
+    }
+
+    fn restore_step_breakpoint(&self, step: StepBreakpoint) -> Result<(), SceError> {
+        match step {
+            StepBreakpoint::Hw { tid, .. } => sce_call!(ksceKernelSetTHBP(tid, 5, 0, 0)).map(drop),
+            StepBreakpoint::Sw { bp, .. } => self.restore_sw_breakpoint(self.pid(), &bp),
+        }
+    }
+
+    pub fn is_step(&self, tid: SceUID, addr: u32) -> bool {
+        self.step
+            .lock()
+            .as_ref()
+            .is_some_and(|step| step.tid() == tid && step.addr() == addr)
     }
 
     pub fn step_finished(&self) {
-        let Some((step_tid, step_addr)) = self.step.lock().take() else {
+        let Some(step) = self.step.lock().take() else {
             return;
         };
-        self.clear_sw_breakpoint(step_addr);
+        let step_tid = step.tid();
+        if let Err(err) = self.restore_step_breakpoint(step) {
+            println!("step_finished: {err}");
+        }
         *self.step_result.lock() = Some(step_tid);
         if let Some(evflag) = self.evflag() {
             let _ = evflag.set(EV_WAKE_WORKER);
@@ -234,7 +288,7 @@ impl GdbSessionInner {
             };
             if slot.addr == addr {
                 if slot.kind != kind {
-                    sce_call!(sceKernelSetPHWP(pid, idx as _, addr, wp_control(kind)))?;
+                    sce_call!(ksceKernelSetPHWP(pid, idx as _, addr, wp_control(kind)))?;
                     slot.kind = kind;
                 }
                 return Ok(true);
@@ -243,7 +297,7 @@ impl GdbSessionInner {
 
         for (idx, slot) in wps.iter_mut().enumerate() {
             if slot.is_none() {
-                sce_call!(sceKernelSetPHWP(pid, idx as _, addr, wp_control(kind)))?;
+                sce_call!(ksceKernelSetPHWP(pid, idx as _, addr, wp_control(kind)))?;
                 *slot = Some(HwWatchpoint { addr, kind });
                 return Ok(true);
             }
@@ -260,7 +314,7 @@ impl GdbSessionInner {
 
         for (idx, slot) in wps.iter_mut().enumerate() {
             if slot.as_ref().is_some_and(|slot| slot.addr == addr) {
-                sce_call!(sceKernelSetPHWP(pid, idx as _, 0, 0))?;
+                sce_call!(ksceKernelSetPHWP(pid, idx as _, 0, 0))?;
                 *slot = None;
                 return Ok(true);
             }
@@ -268,7 +322,7 @@ impl GdbSessionInner {
         Ok(false)
     }
 
-    pub fn set_hw_breakpoint(&self, addr: u32) -> Result<bool, SceError> {
+    pub fn set_hw_breakpoint(&self, addr: u32, kind: ArmBreakpointKind) -> Result<bool, SceError> {
         if !is_debug_enabled() {
             return Ok(false);
         }
@@ -283,7 +337,8 @@ impl GdbSessionInner {
 
         for (idx, slot) in bps.iter_mut().enumerate() {
             if slot.is_none() {
-                sce_call!(sceKernelSetPHBP(pid, idx as _, addr, bp_control()))?;
+                let (value, control) = bp_value_control(addr, kind);
+                sce_call!(ksceKernelSetPHBP(pid, idx as _, value, control))?;
                 *slot = Some(HwBreakpoint { addr });
                 return Ok(true);
             }
@@ -300,7 +355,7 @@ impl GdbSessionInner {
 
         for (idx, slot) in bps.iter_mut().enumerate() {
             if slot.as_ref().is_some_and(|slot| slot.addr == addr) {
-                sce_call!(sceKernelSetPHBP(pid, idx as _, 0, 0))?;
+                sce_call!(ksceKernelSetPHBP(pid, idx as _, 0, 0))?;
                 *slot = None;
                 return Ok(true);
             }
@@ -438,8 +493,28 @@ pub fn find_session_for_pid(pid: SceUID) -> Option<&'static GdbSessionInner> {
         .find(|s| s.pid.load(Ordering::Acquire) == pid)
 }
 
-fn bp_control() -> u32 {
-    (1 << 0) | (0x3 << 1) | (0xF << 5) | (0x1 << 14) | (0x0 << 20)
+const DBGBCR_ENABLE: u32 = 1 << 0;
+const DBGBCR_PMC_ANY: u32 = 0x3 << 1;
+const DBGBCR_BAS_LOW_HALF: u32 = 0x3 << 5;
+const DBGBCR_BAS_HIGH_HALF: u32 = 0xC << 5;
+const DBGBCR_BAS_ALL: u32 = 0xF << 5;
+
+fn bp_value_control(addr: u32, kind: ArmBreakpointKind) -> (u32, u32) {
+    let bas = match kind {
+        ArmBreakpointKind::Arm32 => DBGBCR_BAS_ALL,
+        ArmBreakpointKind::Thumb16 | ArmBreakpointKind::Thumb32 => {
+            if addr & 2 != 0 {
+                DBGBCR_BAS_HIGH_HALF
+            } else {
+                DBGBCR_BAS_LOW_HALF
+            }
+        }
+    };
+    let addr = match kind {
+        ArmBreakpointKind::Arm32 => addr,
+        ArmBreakpointKind::Thumb16 | ArmBreakpointKind::Thumb32 => addr & !3,
+    };
+    (addr, DBGBCR_ENABLE | DBGBCR_PMC_ANY | bas)
 }
 
 fn wp_control(kind: WatchKind) -> u32 {
@@ -448,7 +523,7 @@ fn wp_control(kind: WatchKind) -> u32 {
         WatchKind::Write => 0b10,
         WatchKind::ReadWrite => 0b11,
     };
-    1 | (1 << 1) | (lsc << 3) | (0xF << 5) | (0x1 << 14) | (0 << 20) | (0 << 24)
+    DBGBCR_ENABLE | DBGBCR_PMC_ANY | (lsc << 3) | DBGBCR_BAS_ALL
 }
 
 fn is_shared_address(addr: u32) -> bool {
@@ -510,11 +585,11 @@ impl GdbSession {
         self.inner().clear_hw_watchpoint(addr)
     }
 
-    pub fn set_hw_breakpoint(&self, addr: u32) -> Result<bool, SceError> {
+    pub fn set_hw_breakpoint(&self, addr: u32, kind: ArmBreakpointKind) -> Result<bool, SceError> {
         if !is_debug_enabled() {
             return Ok(false);
         }
-        self.inner().set_hw_breakpoint(addr)
+        self.inner().set_hw_breakpoint(addr, kind)
     }
 
     pub fn clear_hw_breakpoint(&self, addr: u32) -> Result<bool, SceError> {
@@ -524,19 +599,27 @@ impl GdbSession {
         self.inner().clear_hw_breakpoint(addr)
     }
 
-    pub fn set_step(&self, tid: SceUID, addr: u32) -> Result<(), SceError> {
-        self.inner.set_step(tid, addr);
-        Ok(())
+    pub fn set_step(
+        &self,
+        tid: SceUID,
+        addr: u32,
+        kind: ArmBreakpointKind,
+    ) -> Result<(), SceError> {
+        self.inner.set_step(tid, addr, kind)
     }
 
     pub fn clear_all(&self) {
         let inner = self.inner();
         let pid = inner.pid.load(Ordering::Acquire);
 
+        if let Err(err) = inner.clear_step_breakpoint() {
+            println!("clear_step_breakpoint: {err}");
+        }
+
         let mut bps = inner.hw_breakpoints.lock();
         for (idx, slot) in bps.iter_mut().enumerate() {
             if slot.is_some() {
-                let _ = sce_call!(sceKernelSetPHBP(pid, idx as _, 0, 0));
+                let _ = sce_call!(ksceKernelSetPHBP(pid, idx as _, 0, 0));
                 *slot = None;
             }
         }
@@ -544,7 +627,7 @@ impl GdbSession {
         let mut wps = inner.hw_watchpoints.lock();
         for (idx, slot) in wps.iter_mut().enumerate() {
             if slot.is_some() {
-                let _ = sce_call!(sceKernelSetPHWP(pid, idx as _, 0, 0));
+                let _ = sce_call!(ksceKernelSetPHWP(pid, idx as _, 0, 0));
                 *slot = None;
             }
         }

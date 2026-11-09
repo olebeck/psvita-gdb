@@ -164,8 +164,8 @@ libstub_ver!(SceProcessmgrForKernel, 0x7A69DE86, 0xEB1F8EF7,
     (0x080CDC59, 0x6894499C, ksceKernelResumeProcess(pid: SceUID) -> i32),
     (0xC6820972, 0x98AE4BC8, ksceKernelGetUIDProcessClass() -> *mut SceClass),
     (0x95F9ED94, 0xD20553C6, ksceKernelGetProcessMainThread(pid: SceUID) -> SceUID),
-    (0x59FA3216, 0x59FA3216, sceKernelSetPHBP(pid: i32, index: u32, addr: u32, control: u32) -> i32),
-    (0x54D7B16A, 0xC55BF6C3, sceKernelSetPHWP(pid: i32, index: u32, addr: u32, control: u32) -> i32),
+    (0x59FA3216, 0x59FA3216, ksceKernelSetPHBP(pid: i32, index: u32, addr: u32, control: u32) -> i32),
+    (0x54D7B16A, 0xC55BF6C3, ksceKernelSetPHWP(pid: i32, index: u32, addr: u32, control: u32) -> i32),
 );
 
 libstub_ver!(SceDebugForKernel, 0x88C17370, 0x13D793B7,
@@ -186,7 +186,8 @@ libstub_ver!(SceCpuForKernel, 0x54BF2BAB, 0xA5195D20,
 
 libstub!(SceThreadmgrForDriver, 0xE2C40624,
     (0x64E89DE9, ksceKernelSetThreadCpuRegisters(thid: SceUID, registers: *const SceArmCpuRegisters, mask: u32) -> i32),
-    (0x49A0B679, ksceKernelSetVfpRegisterForDebugger(thid: SceUID, registers: *const c_void) -> i32)
+    (0x49A0B679, ksceKernelSetVfpRegisterForDebugger(thid: SceUID, registers: *const c_void) -> i32),
+    (0x385831A1, ksceKernelSetTHBP(thid: SceUID, index: u32, addr: u32, control: u32) -> i32),
 );
 
 libstub_ver!(SceThreadmgrForKernel, 0xA8CA0EFD, 0x7F8593BA,

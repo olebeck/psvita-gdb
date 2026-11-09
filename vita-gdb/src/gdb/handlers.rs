@@ -212,7 +212,7 @@ fn handle_break(
     }
     halt_for_debug(pid, tid);
 
-    if session.is_step(fault_addr) {
+    if session.is_step(tid, fault_addr) {
         session.step_finished();
     } else if is_bkpt(&insn, thumb) {
         session.push_excp(ExceptionEvent::SwBreak { tid });

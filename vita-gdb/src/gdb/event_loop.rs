@@ -39,7 +39,6 @@ pub fn run_session(
             },
 
             GdbStubStateMachine::Running(mut gdb) => {
-                println!("GdbStubStateMachine::Running");
                 if ctrl_c {
                     ctrl_c = false;
                     interrupt_target(target);
