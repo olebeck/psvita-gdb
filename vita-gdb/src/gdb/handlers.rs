@@ -206,7 +206,10 @@ fn handle_break(
     let thumb = is_thumb(context);
     let read_len = if thumb { 2 } else { 4 };
     let mut insn = [0u8; 4];
-    if let Err(err) = read_user_process(pid, fault_addr as _, &mut insn[..read_len]) {
+    let Some(buf) = insn.get_mut(..read_len) else {
+        return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
+    };
+    if let Err(err) = read_user_process(pid, fault_addr as _, buf) {
         println!("handle_break: {err}");
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     }

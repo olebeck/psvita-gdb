@@ -198,7 +198,8 @@ libstub_ver!(SceModulemgrForKernel, 0xC445FA63, 0x92C9FFC2,
     (0x97CF7B4E, 0xB72C75A4, ksceKernelGetModuleList(pid: SceUID, flags1: i32, flags2: i32, modids: *mut SceUID, num: *mut u32) -> i32),
     (0xD269F915, 0xDAA90093, ksceKernelGetModuleInfo(pid: SceUID, modid: SceUID, info: *mut SceKernelModuleInfo) -> i32),
     (0x20A27FA9, 0x679F5144, ksceKernelGetModuleIdByPid(pid: SceUID) -> i32),
-    (0x0053BA4A, 0x0C668636, ksceKernelGetModuleIdByAddrForDebugger(pid: SceUID, addr: *const c_void) -> i32)
+    (0x0053BA4A, 0x0C668636, ksceKernelGetModuleIdByAddrForDebugger(pid: SceUID, addr: *const c_void) -> i32),
+    (0xFE303863, 0x37512E29, ksceKernelGetModuleCB(modid: SceUID, module_cb: *mut *mut c_void) -> i32)
 );
 
 // SKPLForKernel

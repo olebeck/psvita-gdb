@@ -18,11 +18,11 @@ use vitasdk_sys::{
 
 use crate::kernel::{
     ffi::{
-        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelGetModuleInfo,
-        ksceKernelGetModuleList, ksceKernelGetProcessMainThread, ksceKernelGetThreadContextInfo,
-        ksceKernelGetUIDMemBlockClass, ksceKernelGetUIDProcessClass,
-        ksceKernelL1IcacheInvalidateEntireAllCore, ksceKernelResumeProcess,
-        ksceKernelSuspendProcess, ksceKernelSysrootGetProcessTitleId,
+        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelGetModuleCB,
+        ksceKernelGetModuleInfo, ksceKernelGetModuleList, ksceKernelGetProcessMainThread,
+        ksceKernelGetThreadContextInfo, ksceKernelGetUIDMemBlockClass,
+        ksceKernelGetUIDProcessClass, ksceKernelL1IcacheInvalidateEntireAllCore,
+        ksceKernelResumeProcess, ksceKernelSuspendProcess, ksceKernelSysrootGetProcessTitleId,
     },
     thread::delay_thread,
 };
@@ -218,6 +218,13 @@ pub fn get_module_info(pid: SceUID, modid: SceUID) -> Result<SceKernelModuleInfo
     info.size = size_of::<SceKernelModuleInfo>() as _;
     sce_call!(ksceKernelGetModuleInfo(pid, modid, &mut info))?;
     Ok(info)
+}
+
+pub fn get_module_fingerprint(modid: SceUID) -> Result<u32, SceError> {
+    let mut module_cb = null_mut();
+    sce_call!(ksceKernelGetModuleCB(modid, &mut module_cb))?;
+    let fingerprint = unsafe { (module_cb.byte_add(48) as *const u32).read() };
+    Ok(fingerprint)
 }
 
 pub fn get_memblock_info(uid: SceUID) -> Result<SceKernelMemBlockInfoEx, SceError> {

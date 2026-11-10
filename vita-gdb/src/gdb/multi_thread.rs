@@ -346,8 +346,9 @@ impl VitaTarget {
             return Err(SceError::new(-1, "read_registers"));
         }
 
+        let insn_addr = regs.pc as usize;
         let mut insn = [0u8; 4];
-        if self.read(regs.pc as _, &mut insn).is_none() {
+        if self.read(insn_addr, &mut insn).is_none() {
             return Err(SceError::new(-1, "read_registers read pc insn"));
         }
 
@@ -362,7 +363,7 @@ impl VitaTarget {
             }
             Ok(next) => next,
         };
-        println!("curr_pc={:x} next_pc={:x}", regs.pc, addr);
+        println!("curr_pc={:x} next_pc={:x}", insn_addr, addr);
 
         let kind = if thumb {
             ArmBreakpointKind::Thumb16

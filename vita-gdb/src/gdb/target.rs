@@ -39,9 +39,9 @@ use crate::{
         ffi::ksceKernelGetModuleIdByPid,
         thread::delay_thread,
         utils::{
-            ArgvWriter, SceError, StreamWriter, get_module_ids, get_module_info, get_process_ids,
-            get_process_status, get_thread_ids, get_thread_info, halt_process, name_to_str,
-            resume_process, str_to_buf,
+            ArgvWriter, SceError, StreamWriter, get_module_fingerprint, get_module_ids,
+            get_module_info, get_process_ids, get_process_status, get_thread_ids, get_thread_info,
+            halt_process, name_to_str, resume_process, str_to_buf,
         },
     },
     println, sce_call,
@@ -75,7 +75,6 @@ fn wait_for_process(pid: SceUID) -> Result<(), SceError> {
 pub struct VitaTarget {
     pub(crate) session: Option<GdbSession>,
     pub(crate) evflag: EventFlagRef,
-    pub(crate) detached: bool,
     pub(crate) attach_kind: AttachKind,
     pub(crate) step_action: Option<SceUID>,
     pub(crate) continue_actions: Vec<SceUID, 64>,
@@ -86,7 +85,6 @@ impl VitaTarget {
         VitaTarget {
             session: None,
             evflag,
-            detached: false,
             attach_kind: AttachKind::Attach,
             step_action: None,
             continue_actions: Vec::new(),
@@ -97,18 +95,15 @@ impl VitaTarget {
         self.session.as_ref().map(|s| s.inner().pid())
     }
 
-    pub fn attach(&mut self, pid: SceUID, kind: AttachKind) -> bool {
+    fn attach(&mut self, pid: SceUID) -> bool {
         if self.session.is_some() {
-            println!("already attached");
-            return false;
+            self.detach();
         }
-        let Some(session) = GdbSession::new(self.evflag, pid) else {
+        let Some(session) = GdbSession::new(pid, self.evflag) else {
             println!("gdb session for pid {pid} already exists or no free slots");
             return false;
         };
         self.session = Some(session);
-        self.detached = false;
-        self.attach_kind = kind;
         true
     }
 
@@ -116,8 +111,8 @@ impl VitaTarget {
         if let Some(session) = self.session.take() {
             session.clear_all();
             let pid = session.inner().pid();
+            drop(session);
             let _ = resume_process(pid);
-            self.detached = true;
         }
     }
 }
@@ -180,21 +175,16 @@ impl Target for VitaTarget {
 }
 
 impl ExtendedMode for VitaTarget {
-    #[inline(always)]
-    fn support_current_active_pid(&mut self) -> Option<CurrentActivePidOps<'_, Self>> {
-        Some(self)
-    }
-
     fn attach(&mut self, new_pid: Pid) -> TargetResult<(), Self> {
         let pid = new_pid.get() as SceUID;
         if new_pid == FAKE_PID || pid == 0x10005 {
             return Err(TargetError::NonFatal);
         }
 
-        self.detach();
-        if !self.attach(pid, AttachKind::Attach) {
+        if !self.attach(pid) {
             return Err(TargetError::NonFatal);
         }
+        self.attach_kind = AttachKind::Attach;
 
         if let Err(err) = halt_process(pid) {
             println!("attach: halt of pid {pid} {err}");
@@ -292,10 +282,10 @@ impl ExtendedMode for VitaTarget {
             TargetError::NonFatal
         })?;
 
-        self.detach();
-        if !self.attach(pid, AttachKind::Run) {
+        if !self.attach(pid) {
             return Err(TargetError::NonFatal);
         }
+        self.attach_kind = AttachKind::Run;
 
         if let Err(err) = wait_for_process(pid) {
             println!("run: process {pid} did not start: {err}");
@@ -305,6 +295,11 @@ impl ExtendedMode for VitaTarget {
 
         let pid = Pid::new(pid as _).ok_or(TargetError::NonFatal)?;
         Ok(pid)
+    }
+
+    #[inline(always)]
+    fn support_current_active_pid(&mut self) -> Option<CurrentActivePidOps<'_, Self>> {
+        Some(self)
     }
 }
 
@@ -346,10 +341,18 @@ impl Libraries for VitaTarget {
                     continue;
                 }
             };
-            let Ok(path) = unsafe { CStr::from_ptr(info.path.as_ptr() as _) }.to_str() else {
+            let Some(path) = name_to_str(&info.path) else {
                 continue;
             };
-            let _ = write!(writer, r#"<library name="{}">"#, path);
+            let Some(name) = name_to_str(&info.module_name) else {
+                continue;
+            };
+            let fingerprint = get_module_fingerprint(modid).unwrap_or(0xdeadbeef);
+            let _ = write!(
+                writer,
+                r#"<library name="{}" module-name="{}" fingerprint="0x{:08x}">"#,
+                path, name, fingerprint
+            );
             for seg in info.segments.iter() {
                 if seg.size == 0 {
                     break;
@@ -383,7 +386,7 @@ impl Threads for VitaTarget {
         };
 
         let mut writer = StreamWriter::new(buf, offset as _);
-        let _ = write!(writer, "<?xml version=\"1.0\"?><threads>");
+        let _ = write!(writer, r#"<?xml version="1.0"?><threads>"#);
         for tid in tids {
             let info = match get_thread_info(tid) {
                 Ok(info) => info,
@@ -402,7 +405,7 @@ impl Threads for VitaTarget {
             };
             let _ = write!(
                 writer,
-                "<thread id=\"{}\" core=\"{core}\" name=\"{name}\" id_str=\"{name}\"></thread>",
+                r#"<thread id="{}" core="{core}" name="{name}" id_str="{name}"></thread>"#,
                 format_tid(tid as _)
             );
         }
@@ -475,21 +478,15 @@ impl ExecFile for VitaTarget {
         let Some(pid) = pid.map(|pid| pid.get() as i32).or(self.pid()) else {
             return Err(TargetError::NonFatal);
         };
-        let modid = match sce_call!(ksceKernelGetModuleIdByPid(pid)) {
-            Ok(modid) => modid,
+        let info = match sce_call!(ksceKernelGetModuleIdByPid(pid))
+            .and_then(|modid| get_module_info(pid, modid))
+        {
+            Ok(info) => info,
             Err(err) => {
                 println!("get_exec_file {err}");
                 return Err(TargetError::NonFatal);
             }
         };
-        let info = match get_module_info(pid, modid) {
-            Ok(modid) => modid,
-            Err(err) => {
-                println!("get_exec_file {err}");
-                return Err(TargetError::NonFatal);
-            }
-        };
-
         let Some(path) = name_to_str(&info.path) else {
             return Ok(0);
         };

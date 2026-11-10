@@ -3,3 +3,4 @@ Cargo.lock
 *.skprx
 tmp/
 refs/
+__pycache__

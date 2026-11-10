@@ -118,12 +118,6 @@ enum Incoming {
 
 fn next_event_or_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Incoming, SceError> {
     loop {
-        // has the process detached
-        if target.detached {
-            target.detached = false;
-            return Ok(Incoming::Exited(0));
-        }
-
         // was there an async event
         if let Some(session) = target.session.as_ref() {
             let inner = session.inner();
