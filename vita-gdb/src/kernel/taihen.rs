@@ -123,7 +123,7 @@ macro_rules! hook {
         as $orig:ident
         $body:block
     ) => {
-        paste::paste! {
+        ::pastey::paste! {
             #[allow(non_camel_case_types, non_upper_case_globals)]
             type [<$name:camel Fn>] = extern "C" fn($($arg: $ty),*) -> $ret;
 
@@ -148,7 +148,7 @@ macro_rules! hook {
 #[macro_export]
 macro_rules! hook_import {
     ($pid:expr, $module:expr, $lib_nid:expr, $func_nid:expr, $hook:ident) => {
-        paste::paste! {
+        ::pastey::paste! {
             {
                 match $crate::kernel::taihen::hook_import(
                     $pid,

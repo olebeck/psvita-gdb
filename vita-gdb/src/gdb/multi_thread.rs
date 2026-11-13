@@ -106,7 +106,7 @@ impl MultiThreadBase for VitaTarget {
             Err(err) if err.code == 0x80020008u32 as i32 => (),
             Err(err) => {
                 println!("read_register {err} tid={tid}");
-                return Err(gdbstub::target::TargetError::NonFatal);
+                return Err(TargetError::NonFatal);
             }
         };
 
@@ -406,6 +406,21 @@ impl ThreadExtraInfo for VitaTarget {
     }
 }
 
+fn get_registers(tid: SceUID) -> Result<SceThreadCpuRegisters, SceError> {
+    let mut registers: SceThreadCpuRegisters = unsafe { zeroed() };
+    sce_call!(ksceKernelGetThreadCpuRegisters(tid, &mut registers))?;
+    Ok(registers)
+}
+
+fn get_vfp_registers(tid: SceUID) -> Result<[u64; 32], SceError> {
+    let mut vfp = [0x7ff8dead7f80deadu64; 32];
+    match sce_call!(ksceKernelGetVfpRegisterForDebugger(tid, &raw mut vfp as _)) {
+        Ok(_) => Ok(vfp),
+        Err(err) if err.code == 0x80020008u32 as i32 => Ok(vfp),
+        Err(err) => Err(err),
+    }
+}
+
 impl SingleRegisterAccess for VitaTarget {
     fn read_register(
         &mut self,
@@ -414,22 +429,21 @@ impl SingleRegisterAccess for VitaTarget {
         buf: &mut [u8],
     ) -> TargetResult<usize, Self> {
         if self.session.is_none() {
-            return Ok(0);
+            return Err(TargetError::NonFatal);
         }
         let tid = tid.get() as SceUID;
+        println!("read_register tid={tid} reg_id={reg_id:?}");
 
         if let Armv7RegId::Dpr(dpr) = reg_id {
-            let mut vfp = [0x7ff8dead7f80deadu64; 32];
-            match sce_call!(ksceKernelGetVfpRegisterForDebugger(tid, &raw mut vfp as _)) {
-                Ok(_) => (),
-                Err(err) if err.code == 0x80020008u32 as i32 => (),
+            let vfp = match get_vfp_registers(tid) {
+                Ok(vfp) => vfp,
                 Err(err) => {
                     println!("read_register {err} tid={tid}");
-                    return Err(gdbstub::target::TargetError::NonFatal);
+                    return Err(TargetError::NonFatal);
                 }
             };
             let Some(reg) = vfp.get(dpr as usize) else {
-                return Ok(0);
+                return Err(TargetError::NonFatal);
             };
             for (dst, val) in buf.iter_mut().zip(&reg.to_le_bytes()) {
                 *dst = *val;
@@ -437,11 +451,13 @@ impl SingleRegisterAccess for VitaTarget {
             return Ok(8);
         };
 
-        let mut registers: SceThreadCpuRegisters = unsafe { zeroed() };
-        if let Err(err) = sce_call!(ksceKernelGetThreadCpuRegisters(tid, &mut registers)) {
-            println!("read_register {err} tid={tid}");
-            return Err(gdbstub::target::TargetError::NonFatal);
-        }
+        let registers = match get_registers(tid) {
+            Ok(registers) => registers,
+            Err(err) => {
+                println!("read_register {err} tid={tid}");
+                return Err(TargetError::NonFatal);
+            }
+        };
 
         let entries = unsafe { &registers.__bindgen_anon_1.entry };
         let th_regs = if entries[0].cpsr & 0x1F == 0x10 {
@@ -451,7 +467,7 @@ impl SingleRegisterAccess for VitaTarget {
         };
 
         let value = match reg_id {
-            Armv7RegId::Gpr(n) => match n {
+            Armv7RegId::Gpr(gpr) => match gpr {
                 0 => th_regs.r0,
                 1 => th_regs.r1,
                 2 => th_regs.r2,
@@ -465,13 +481,13 @@ impl SingleRegisterAccess for VitaTarget {
                 10 => th_regs.r10,
                 11 => th_regs.r11,
                 12 => th_regs.r12,
-                _ => 0xdeadbeef,
+                _ => return Err(TargetError::NonFatal),
             },
             Armv7RegId::Sp => th_regs.sp,
             Armv7RegId::Lr => th_regs.lr,
             Armv7RegId::Pc => th_regs.pc,
             Armv7RegId::Cpsr => th_regs.cpsr,
-            Armv7RegId::Dpr(_) => 0xdeadbeef, // TODO
+            Armv7RegId::Dpr(_) => return Err(TargetError::NonFatal),
             Armv7RegId::Fpscr => th_regs.fpscr,
         };
         buf.copy_from_slice(&value.to_le_bytes());
@@ -485,9 +501,31 @@ impl SingleRegisterAccess for VitaTarget {
         val: &[u8],
     ) -> TargetResult<(), Self> {
         let tid = tid.get() as SceUID;
-        let Ok(value) = val.try_into().map(u32::from_le_bytes) else {
-            return Ok(());
-        };
+        println!("write_register: tid={tid} reg_id={reg_id:?} val={val:?}");
+
+        if let Armv7RegId::Dpr(dpr) = reg_id {
+            let mut vfp = match get_vfp_registers(tid) {
+                Ok(vfp) => vfp,
+                Err(err) => {
+                    println!("read_register {err} tid={tid}");
+                    return Err(TargetError::NonFatal);
+                }
+            };
+            let Some(reg) = vfp.get_mut(dpr as usize) else {
+                return Err(TargetError::NonFatal);
+            };
+            let Ok(value) = val.try_into().map(u64::from_le_bytes) else {
+                return Err(TargetError::NonFatal);
+            };
+            *reg = value;
+            if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(
+                tid,
+                vfp.as_ptr() as *const _
+            )) {
+                println!("write_register {err} tid={tid}");
+                return Err(TargetError::NonFatal);
+            }
+        }
 
         let mut regs: SceArmCpuRegisters = unsafe { zeroed() };
         let (reg, mask) = match reg_id {
@@ -513,6 +551,10 @@ impl SingleRegisterAccess for VitaTarget {
             Armv7RegId::Cpsr => (&mut regs.cpsr, SCE_REG_CPSR),
             Armv7RegId::Dpr(_) => return Err(TargetError::NonFatal),
             Armv7RegId::Fpscr => (&mut regs.fpscr, SCE_REG_FPSCR),
+        };
+
+        let Ok(value) = val.try_into().map(u32::from_le_bytes) else {
+            return Err(TargetError::NonFatal);
         };
         *reg = value;
 

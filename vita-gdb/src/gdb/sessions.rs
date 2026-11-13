@@ -526,6 +526,7 @@ impl SessionRef {
         len: u32,
         kind: WatchKind,
     ) -> Result<bool, SceError> {
+        println!("set_hw_watchpoint addr={addr:x}");
         match self.lock().as_mut() {
             Some(inner) => inner.set_hw_watchpoint(addr, len, kind),
             None => Ok(false),
@@ -540,6 +541,7 @@ impl SessionRef {
     }
 
     pub fn set_hw_breakpoint(&self, addr: u32, kind: ArmBreakpointKind) -> Result<bool, SceError> {
+        println!("set_hw_breakpoint addr={addr:x}");
         match self.lock().as_mut() {
             Some(inner) => inner.set_hw_breakpoint(addr, kind),
             None => Ok(false),

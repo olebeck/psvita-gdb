@@ -37,7 +37,7 @@ macro_rules! vitastub_ver {
         $libnid_360:expr, $funcnid_360:expr,
         $libnid_363:expr, $funcnid_363:expr
     ) => {
-        paste::paste! {
+        ::pastey::paste! {
             vitastub!($lib, [<$name _360>], 0x18, $libnid_360, $funcnid_360);
             vitastub!($lib, [<$name _363>], 0x18, $libnid_363, $funcnid_363);
 
@@ -110,7 +110,7 @@ macro_rules! libstub_ver {
                 pub unsafe fn $name($( $arg: $arg_ty ),*) -> $ret;
             }
             vitastub_ver!($lib, $name, $libnid_360, $funcnid_360, $libnid_363, $funcnid_363);
-            paste::paste! {
+            ::pastey::paste! {
                 #[used]
                 #[unsafe(link_section = "vita_patch363")]
                 static [<$name:upper _PATCH363>]: FuncVerStub = {

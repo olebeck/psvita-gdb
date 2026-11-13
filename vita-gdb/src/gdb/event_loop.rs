@@ -22,27 +22,45 @@ pub fn run_session(
     let mut ctrl_c = false;
     loop {
         gdb = match gdb {
-            GdbStubStateMachine::Idle(mut gdb) => match next_byte(target, gdb.borrow_conn()) {
-                Ok(Incoming::Byte(byte)) => gdb.incoming_data(target, byte)?,
-                Ok(Incoming::Closed) => {
-                    println!("eventloop: connection closed");
-                    break Ok(DisconnectReason::Disconnect);
+            GdbStubStateMachine::Idle(mut gdb) => {
+                if ctrl_c {
+                    ctrl_c = false;
                 }
-                Ok(ev) => {
-                    println!("eventloop: unexpected event {ev:?} in idle");
-                    break Ok(DisconnectReason::Disconnect);
+                match next_byte(target, gdb.borrow_conn()) {
+                    Ok(Incoming::Byte(byte)) => gdb.incoming_data(target, byte)?,
+                    Ok(Incoming::Closed) => {
+                        println!("eventloop: connection closed");
+                        break Ok(DisconnectReason::Disconnect);
+                    }
+                    Ok(ev) => {
+                        println!("eventloop: unexpected event {ev:?} in idle");
+                        break Ok(DisconnectReason::Disconnect);
+                    }
+                    Err(err) => {
+                        println!("eventloop: io error {err}");
+                        break Ok(DisconnectReason::Disconnect);
+                    }
                 }
-                Err(err) => {
-                    println!("eventloop: io error {err}");
-                    break Ok(DisconnectReason::Disconnect);
-                }
-            },
+            }
 
             GdbStubStateMachine::Running(mut gdb) => {
                 if ctrl_c {
                     ctrl_c = false;
-                    interrupt_target(target);
-                    gdb.report_stop(target).signal(Signal::SIGINT)?
+                    let Some(pid) = target.pid() else {
+                        break Ok(DisconnectReason::Disconnect);
+                    };
+                    match halt_process(pid) {
+                        Err(err) => {
+                            println!("halt_process: {err}");
+                            break Ok(DisconnectReason::Disconnect);
+                        }
+                        Ok(tid) => {
+                            let tid = unsafe { Tid::new_unchecked(tid as _) };
+                            gdb.report_stop(target)
+                                .signal_with_thread(Signal::SIGINT, tid)?
+                                .done()?
+                        }
+                    }
                 } else {
                     let ev = match next_event_or_byte(target, gdb.borrow_conn()) {
                         Ok(ev) => ev,
@@ -94,7 +112,6 @@ pub fn run_session(
             }
 
             GdbStubStateMachine::CtrlCInterrupt(gdb) => {
-                println!("GdbStubStateMachine::CtrlCInterrupt");
                 ctrl_c = true;
                 gdb.interrupt_handled()
             }
@@ -168,14 +185,5 @@ fn next_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Incoming, Sc
         target
             .evflag
             .wait(EV_WAKE_WORKER, SCE_EVENT_WAITCLEAR_PAT)?;
-    }
-}
-
-fn interrupt_target(target: &mut VitaTarget) {
-    let Some(pid) = target.pid() else {
-        return;
-    };
-    if let Err(err) = halt_process(pid) {
-        println!("interrupt: {err}");
     }
 }

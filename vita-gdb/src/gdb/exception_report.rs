@@ -2,14 +2,14 @@ use core::ffi::{CStr, c_void};
 use core::ptr::null_mut;
 
 use vitasdk_sys::{
-    SCE_KERNEL_BACKTRACE_MODE_USER, SceExcpmgrExceptionContext, SceKernelCallFrame,
-    SceKernelThreadInfo, SceUID, ksceGUIDName, ksceKernelBacktrace,
+    SCE_KERNEL_BACKTRACE_MODE_KERNEL, SCE_KERNEL_BACKTRACE_MODE_USER, SceExcpmgrExceptionContext,
+    SceKernelCallFrame, SceKernelThreadInfo, SceUID, ksceGUIDName, ksceKernelBacktrace,
     ksceKernelFindProcMemBlockByAddr, ksceKernelGetMemBlockBase, kscePUIDtoGUID,
 };
 
 use crate::gdb::sessions::ExceptionKind;
-use crate::kernel::ffi::ksceKernelGetModuleIdByAddrForDebugger;
-use crate::kernel::utils::{get_module_info, get_thread_info, name_to_str};
+use crate::kernel::ffi::{ksceKernelDebugPutchar, ksceKernelGetModuleIdByAddrForDebugger};
+use crate::kernel::utils::{SceError, get_module_info, get_thread_info, name_to_str};
 use crate::{print, println, sce_call};
 
 struct StackInfo {
@@ -71,19 +71,16 @@ fn report(
         }
     }
 
-    print_word(
-        "pc",
-        context.address_of_faulting_instruction,
-        pid,
-        stack.as_ref(),
-    );
-    print_word("lr", context.lr, pid, stack.as_ref());
-    print_word("sp", context.sp, pid, stack.as_ref());
+    let pc = context.address_of_faulting_instruction;
+    print_word(2, "pc", pc, pid, stack.as_ref());
+    print_word(2, "lr", context.lr, pid, stack.as_ref());
+    print_word(2, "sp", context.sp, pid, stack.as_ref());
 
+    let mode = spsr_mode(context.SPSR);
     println!(
         "  spsr  0x{:08x}  mode={} thumb={}",
         context.SPSR,
-        mode_name(context.SPSR),
+        mode.to_str(),
         if context.SPSR & (1 << 5) != 0 {
             "yes"
         } else {
@@ -104,7 +101,7 @@ fn report(
     );
 
     if let Some(addr) = fault_addr {
-        print_word("fault", addr, pid, stack.as_ref());
+        print_word(2, "fault", addr, pid, stack.as_ref());
     }
 
     for (name, value) in [
@@ -122,38 +119,56 @@ fn report(
         ("r11", context.r11),
         ("r12", context.r12),
     ] {
-        print_word(name, value, pid, stack.as_ref());
+        print_word(2, name, value, pid, stack.as_ref());
     }
 
-    print_backtrace(pid, tid, stack.as_ref());
+    print_backtrace(pid, tid, stack.as_ref(), mode);
 
     print!("\n\n");
 }
 
-fn print_backtrace(pid: SceUID, tid: SceUID, stack: Option<&StackInfo>) {
-    let mut frames = [SceKernelCallFrame { sp: 0, pc: 0 }; 32];
+fn backtrace(tid: SceUID, frames: &mut [SceKernelCallFrame], mode: i32) -> Result<usize, SceError> {
     let mut num_frames = 0;
-    if let Err(err) = sce_call!(ksceKernelBacktrace(
+    sce_call!(ksceKernelBacktrace(
         tid,
         frames.as_mut_ptr(),
         (frames.len() as u32).wrapping_mul(core::mem::size_of::<SceKernelCallFrame>() as u32),
         &mut num_frames,
-        SCE_KERNEL_BACKTRACE_MODE_USER as _,
-    )) {
-        println!("  backtrace: {err}");
-        return;
-    }
+        mode,
+    ))?;
+    Ok(num_frames as _)
+}
 
-    let count = (num_frames as usize).min(frames.len());
-    if count == 0 {
-        println!("  backtrace: empty");
-        return;
-    }
+fn print_backtrace(pid: SceUID, tid: SceUID, stack: Option<&StackInfo>, mode: Mode) {
+    let modes: &[(&str, i32)] = match mode {
+        Mode::User => &[("user", SCE_KERNEL_BACKTRACE_MODE_USER as i32)],
+        Mode::Svc => &[
+            ("user", SCE_KERNEL_BACKTRACE_MODE_USER as i32),
+            ("kernel", SCE_KERNEL_BACKTRACE_MODE_KERNEL as i32),
+        ],
+        _ => &[("kernel", SCE_KERNEL_BACKTRACE_MODE_KERNEL as i32)],
+    };
 
-    println!("  backtrace:");
-    for (index, frame) in frames.iter().take(count).enumerate() {
-        println!("  #{index:<2} sp=0x{:08x}", frame.sp);
-        print_word("pc", frame.pc, pid, stack);
+    for (name, backtrace_mode) in modes {
+        let mut frames = [SceKernelCallFrame { sp: 0, pc: 0 }; 32];
+        let count = match backtrace(tid, &mut frames, *backtrace_mode) {
+            Ok(count) => count.min(frames.len()),
+            Err(err) => {
+                println!("  {name} backtrace: {err}");
+                continue;
+            }
+        };
+
+        if count == 0 {
+            println!("  {name} backtrace: empty");
+            continue;
+        }
+
+        println!("  {name} backtrace:");
+        for (index, frame) in frames.iter().take(count).enumerate() {
+            println!("  #{index:<2} sp=0x{:08x}", frame.sp);
+            print_word(6, "pc", frame.pc, pid, stack);
+        }
     }
 }
 
@@ -170,8 +185,17 @@ fn stack_info(info: &SceKernelThreadInfo, sp: u32) -> Option<StackInfo> {
     })
 }
 
-fn print_word(label: &str, value: u32, pid: SceUID, stack: Option<&StackInfo>) {
-    print!("  {label:<5} 0x{value:08x}");
+fn print_prefix(prefix: usize) {
+    for _ in 0..prefix {
+        unsafe {
+            ksceKernelDebugPutchar(' ' as _);
+        }
+    }
+}
+
+fn print_word(prefix: usize, label: &str, value: u32, pid: SceUID, stack: Option<&StackInfo>) {
+    print_prefix(prefix);
+    print!("{label:<5} 0x{value:08x}");
 
     if let Some(stack) = stack {
         let addr = value as u64;
@@ -267,15 +291,42 @@ fn dfsr_is_write(dfsr: u32) -> bool {
     dfsr & (1 << 11) != 0
 }
 
-fn mode_name(spsr: u32) -> &'static str {
+#[derive(PartialEq, Clone, Copy)]
+enum Mode {
+    User,
+    Fiq,
+    Irq,
+    Svc,
+    Abort,
+    Undef,
+    System,
+    Unknown,
+}
+
+impl Mode {
+    fn to_str(&self) -> &'static str {
+        match self {
+            Mode::User => "user",
+            Mode::Fiq => "fiq",
+            Mode::Irq => "irq",
+            Mode::Svc => "svc",
+            Mode::Abort => "abort",
+            Mode::Undef => "undef",
+            Mode::System => "system",
+            Mode::Unknown => "unknown",
+        }
+    }
+}
+
+fn spsr_mode(spsr: u32) -> Mode {
     match spsr & 0x1f {
-        0x10 => "user",
-        0x11 => "fiq",
-        0x12 => "irq",
-        0x13 => "svc",
-        0x17 => "abort",
-        0x1b => "undef",
-        0x1f => "system",
-        _ => "unknown",
+        0x10 => Mode::User,
+        0x11 => Mode::Fiq,
+        0x12 => Mode::Irq,
+        0x13 => Mode::Svc,
+        0x17 => Mode::Abort,
+        0x1b => Mode::Undef,
+        0x1f => Mode::System,
+        _ => Mode::Unknown,
     }
 }

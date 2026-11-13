@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 gdbstub = { git = "https://github.com/olebeck/gdbstub", branch = "dev/0.8", default-features = false }
 gdbstub_arch = { git = "https://github.com/olebeck/gdbstub", branch = "dev/0.8", default-features = false }
-paste = "1.0.15"
 vitasdk-sys = { git = "https://github.com/olebeck/vitasdk-sys", features = [
     "SceSysclibForDriver_stub",
     "SceDebugForDriver_stub",
@@ -27,8 +26,8 @@ vitasdk-sys = { git = "https://github.com/olebeck/vitasdk-sys", features = [
     "SceSysconForDriver_stub"
 ] }
 arm-next-pc = { path = "../arm-next-pc" }
-panic-never = "0.1.0"
 heapless = { version = "0.9.3", default-features = false }
+pastey = "0.2.3"
 
 [lints.clippy]
 unwrap_used = "deny"
