@@ -38,13 +38,7 @@ fn main() {
 }
 
 fn do_hooks() {
-    if let Err(err) = hook_import!(
-        0x10005,
-        c"SceAppMgr",
-        0x4E29D3B6,
-        0x7B14DC45,
-        SceQafMgrForDriver_7B14DC45_hook
-    ) {
+    if let Err(err) = hook_import!(0x10005, c"SceAppMgr", 0x4E29D3B6, 0x7B14DC45, SceQafMgrForDriver_7B14DC45_hook) {
         println!("hook_import: {err}");
     }
 

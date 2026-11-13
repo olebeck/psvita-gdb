@@ -7,21 +7,18 @@ use core::{
 
 use vitasdk_sys::{
     SCE_KERNEL_ALLOC_MEMBLOCK_ATTR_HAS_PADDR, SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_IO_NC_RW, SceClass,
-    SceKernelAllocMemBlockKernelOpt, SceKernelIntrStatus, SceKernelMemBlockInfoEx,
-    SceKernelModuleInfo, SceKernelProcessContext, SceKernelThreadContextInfo, SceKernelThreadInfo,
-    SceUID, ksceKernelAllocMemBlock, ksceKernelChangeThreadSuspendStatus,
-    ksceKernelCopyFromUserProc, ksceKernelCpuResumeIntr, ksceKernelCpuSuspendIntr,
-    ksceKernelFreeMemBlock, ksceKernelGetMemBlockBase, ksceKernelGetMemBlockInfo,
-    ksceKernelGetProcessStatus, ksceKernelGetThreadIdList, ksceKernelGetThreadInfo,
-    ksceKernelProcessGetContext, ksceKernelProcessSwitchContext,
+    SceKernelAllocMemBlockKernelOpt, SceKernelIntrStatus, SceKernelMemBlockInfoEx, SceKernelModuleInfo,
+    SceKernelProcessContext, SceKernelThreadContextInfo, SceKernelThreadInfo, SceUID, ksceKernelAllocMemBlock,
+    ksceKernelChangeThreadSuspendStatus, ksceKernelCopyFromUserProc, ksceKernelCpuResumeIntr, ksceKernelCpuSuspendIntr,
+    ksceKernelFreeMemBlock, ksceKernelGetMemBlockBase, ksceKernelGetMemBlockInfo, ksceKernelGetProcessStatus,
+    ksceKernelGetThreadIdList, ksceKernelGetThreadInfo, ksceKernelProcessGetContext, ksceKernelProcessSwitchContext,
 };
 
 use crate::kernel::{
     ffi::{
-        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelGetModuleCB,
-        ksceKernelGetModuleInfo, ksceKernelGetModuleList, ksceKernelGetProcessMainThread,
-        ksceKernelGetThreadContextInfo, ksceKernelGetUIDMemBlockClass,
-        ksceKernelGetUIDProcessClass, ksceKernelL1IcacheInvalidateEntireAllCore,
+        ksceGUIDGetUIDVectorByClass, ksceKernelCopyToUserTextDomain, ksceKernelGetModuleCB, ksceKernelGetModuleInfo,
+        ksceKernelGetModuleList, ksceKernelGetProcessMainThread, ksceKernelGetThreadContextInfo,
+        ksceKernelGetUIDMemBlockClass, ksceKernelGetUIDProcessClass, ksceKernelL1IcacheInvalidateEntireAllCore,
         ksceKernelResumeProcess, ksceKernelSuspendProcess, ksceKernelSysrootGetProcessTitleId,
     },
     thread::delay_thread,
@@ -35,9 +32,7 @@ pub struct SceError {
 }
 
 impl SceError {
-    pub const fn new(code: i32, func: &'static str) -> Self {
-        Self { code, func }
-    }
+    pub const fn new(code: i32, func: &'static str) -> Self { Self { code, func } }
 }
 
 impl Display for SceError {
@@ -71,17 +66,9 @@ pub struct StreamWriter<'a> {
 }
 
 impl<'a> StreamWriter<'a> {
-    pub fn new(buf: &'a mut [u8], skip: usize) -> Self {
-        Self {
-            buf,
-            skip,
-            written: 0,
-        }
-    }
+    pub fn new(buf: &'a mut [u8], skip: usize) -> Self { Self { buf, skip, written: 0 } }
 
-    pub fn written(&self) -> usize {
-        self.written
-    }
+    pub fn written(&self) -> usize { self.written }
 
     pub fn into_cstr(self) -> Option<&'a CStr> {
         if self.written >= self.buf.len() {
@@ -144,9 +131,7 @@ impl ArgvWriter {
         self.append(name.as_bytes()) && self.append(value.as_bytes())
     }
 
-    pub fn add_arg(&mut self, arg: &[u8]) -> bool {
-        self.append(arg)
-    }
+    pub fn add_arg(&mut self, arg: &[u8]) -> bool { self.append(arg) }
 
     pub fn to_slice(&self) -> &[u8] {
         let end_idx = self.offset.wrapping_add(1).min(self.buf.len());
@@ -157,9 +142,7 @@ impl ArgvWriter {
     }
 }
 
-fn get_class_uid_vec<const N: usize>(
-    sce_class: *mut SceClass,
-) -> Result<impl Iterator<Item = SceUID>, SceError> {
+fn get_class_uid_vec<const N: usize>(sce_class: *mut SceClass) -> Result<impl Iterator<Item = SceUID>, SceError> {
     let mut uids = [0; N];
     let mut count = 0;
     sce_call!(ksceGUIDGetUIDVectorByClass(
@@ -254,12 +237,7 @@ pub fn get_process_titleid(pid: SceUID) -> Option<[i8; 16]> {
         }
         return Some(buf);
     }
-    sce_call!(ksceKernelSysrootGetProcessTitleId(
-        pid,
-        buf.as_mut_ptr() as _,
-        buf.len() as _
-    ))
-    .ok();
+    sce_call!(ksceKernelSysrootGetProcessTitleId(pid, buf.as_mut_ptr() as _, buf.len() as _)).ok();
     if let Some(val) = buf.first() {
         if *val == 0 {
             return None;
@@ -322,11 +300,7 @@ pub fn map_paddr(name: &CStr, paddr: u32, size: usize) -> Result<(SceUID, *mut c
 
 pub fn phys_read32(addr: u32) -> Result<u32, SceError> {
     let (uid, base) = map_paddr(c"tmp", addr & !0xfff, 0x1000)?;
-    let value = unsafe {
-        base.byte_add((addr & 0xfff) as usize)
-            .cast::<u32>()
-            .read_volatile()
-    };
+    let value = unsafe { base.byte_add((addr & 0xfff) as usize).cast::<u32>().read_volatile() };
     sce_call!(ksceKernelFreeMemBlock(uid))?;
     Ok(value)
 }

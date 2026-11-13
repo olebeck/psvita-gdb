@@ -55,10 +55,7 @@ fn gdb_thread(socket: TcpSocket) {
         Err(err) => return println!("TcpConn::new: {err}"),
     };
 
-    let gdb = match GdbStubBuilder::new(conn)
-        .with_packet_buffer(&mut buf)
-        .build()
-    {
+    let gdb = match GdbStubBuilder::new(conn).with_packet_buffer(&mut buf).build() {
         Ok(gdb) => gdb,
         Err(err) => return println!("err building: {err}"),
     };

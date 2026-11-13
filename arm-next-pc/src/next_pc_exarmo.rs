@@ -1,6 +1,6 @@
 use exarmo_aarch32::{
-    Amode, BranchKind, Cond, Encoding, GpReg, Instruction, ItState, Mem, Mnemonic, Modifier,
-    ModifierKind, Offset, Operand, PcRead, Reg, Writeback, a32, t32,
+    Amode, BranchKind, Cond, Encoding, GpReg, Instruction, ItState, Mem, Mnemonic, Modifier, ModifierKind, Offset,
+    Operand, PcRead, Reg, Writeback, a32, t32,
 };
 
 use crate::{MemReader, NextPcError, RegContext};
@@ -64,18 +64,13 @@ pub fn next_pc<Mem: MemReader>(regs: &RegContext, mem: &Mem) -> Result<(u32, boo
             Ok((target, target_thumb))
         }
         BranchKind::Indirect | BranchKind::IndirectCall | BranchKind::ExceptionReturn => {
-            indirect_target(&insn, ops, regs, mem, addr, branch.kind)
-                .map(|target| target.unwrap_or(fallthrough))
+            indirect_target(&insn, ops, regs, mem, addr, branch.kind).map(|target| target.unwrap_or(fallthrough))
         }
         _ => Ok(fallthrough),
     }
 }
 
-fn decode_insn<Mem: MemReader>(
-    regs: &RegContext,
-    mem: &Mem,
-    addr: u32,
-) -> Result<(Instruction, u32), NextPcError> {
+fn decode_insn<Mem: MemReader>(regs: &RegContext, mem: &Mem, addr: u32) -> Result<(Instruction, u32), NextPcError> {
     if regs.thumb() {
         let first = mem.read_u16(addr)?;
         let length = t32::length(first);
@@ -140,9 +135,7 @@ fn indirect_target<Mem: MemReader>(
         Mnemonic::Ldm | Mnemonic::Ldmda | Mnemonic::Ldmdb | Mnemonic::Ldmib | Mnemonic::Pop => {
             load_multiple_target(insn, ops, regs, mem)
         }
-        Mnemonic::Rfe | Mnemonic::Rfeda | Mnemonic::Rfedb | Mnemonic::Rfeib => {
-            rfe_target(insn, ops, regs, mem)
-        }
+        Mnemonic::Rfe | Mnemonic::Rfeda | Mnemonic::Rfedb | Mnemonic::Rfeib => rfe_target(insn, ops, regs, mem),
         Mnemonic::Ldr | Mnemonic::Ldrt => load_register_target(ops, regs, mem, addr),
         Mnemonic::Adr
         | Mnemonic::Add
@@ -245,12 +238,7 @@ fn load_multiple_target<Mem: MemReader>(
     let pc_address = match amode {
         Amode::Ia => base.wrapping_add(before_pc.wrapping_mul(4)),
         Amode::Ib => base.wrapping_add(before_pc.wrapping_add(1).wrapping_mul(4)),
-        Amode::Da => base.wrapping_sub(
-            total
-                .wrapping_sub(1)
-                .wrapping_sub(before_pc)
-                .wrapping_mul(4),
-        ),
+        Amode::Da => base.wrapping_sub(total.wrapping_sub(1).wrapping_sub(before_pc).wrapping_mul(4)),
         Amode::Db => base.wrapping_sub(total.wrapping_sub(before_pc).wrapping_mul(4)),
     };
 
@@ -300,18 +288,21 @@ fn eval_alu(insn: &Instruction, ops: &[Operand], regs: &RegContext, addr: u32) -
         Mnemonic::Asr | Mnemonic::Asrs => shift_alias(ops, regs, ModifierKind::Asr),
         Mnemonic::Ror | Mnemonic::Rors => shift_alias(ops, regs, ModifierKind::Ror),
         Mnemonic::Adr => operand_value(arg(ops, 1), regs, addr),
-        Mnemonic::Add | Mnemonic::Adds => operand_value(arg(ops, 1), regs, addr)
-            .wrapping_add(operand_value(arg(ops, 2), regs, addr)),
+        Mnemonic::Add | Mnemonic::Adds => {
+            operand_value(arg(ops, 1), regs, addr).wrapping_add(operand_value(arg(ops, 2), regs, addr))
+        }
         Mnemonic::Adc | Mnemonic::Adcs => operand_value(arg(ops, 1), regs, addr)
             .wrapping_add(operand_value(arg(ops, 2), regs, addr))
             .wrapping_add(carry),
-        Mnemonic::Sub | Mnemonic::Subs => operand_value(arg(ops, 1), regs, addr)
-            .wrapping_sub(operand_value(arg(ops, 2), regs, addr)),
+        Mnemonic::Sub | Mnemonic::Subs => {
+            operand_value(arg(ops, 1), regs, addr).wrapping_sub(operand_value(arg(ops, 2), regs, addr))
+        }
         Mnemonic::Sbc | Mnemonic::Sbcs => operand_value(arg(ops, 1), regs, addr)
             .wrapping_sub(operand_value(arg(ops, 2), regs, addr))
             .wrapping_sub(not_carry),
-        Mnemonic::Rsb | Mnemonic::Rsbs => operand_value(arg(ops, 2), regs, addr)
-            .wrapping_sub(operand_value(arg(ops, 1), regs, addr)),
+        Mnemonic::Rsb | Mnemonic::Rsbs => {
+            operand_value(arg(ops, 2), regs, addr).wrapping_sub(operand_value(arg(ops, 1), regs, addr))
+        }
         Mnemonic::Rsc | Mnemonic::Rscs => operand_value(arg(ops, 2), regs, addr)
             .wrapping_sub(operand_value(arg(ops, 1), regs, addr))
             .wrapping_sub(not_carry),
@@ -390,13 +381,7 @@ fn apply_modifier(value: u32, modifier: Modifier, regs: &RegContext) -> u32 {
     shift(value, modifier.kind, amount, register_shift, regs)
 }
 
-fn shift(
-    value: u32,
-    kind: ModifierKind,
-    amount: u32,
-    register_shift: bool,
-    regs: &RegContext,
-) -> u32 {
+fn shift(value: u32, kind: ModifierKind, amount: u32, register_shift: bool, regs: &RegContext) -> u32 {
     match kind {
         ModifierKind::Lsl if amount == 0 => value,
         ModifierKind::Lsl if amount < 32 => value << amount,
@@ -416,9 +401,7 @@ fn shift(
     }
 }
 
-fn rrx(value: u32, carry: u32) -> u32 {
-    (value >> 1) | (carry << 31)
-}
+fn rrx(value: u32, carry: u32) -> u32 { (value >> 1) | (carry << 31) }
 
 fn shift_amount(operand: Option<Operand>, regs: &RegContext) -> (u32, bool) {
     match operand {
@@ -428,17 +411,11 @@ fn shift_amount(operand: Option<Operand>, regs: &RegContext) -> (u32, bool) {
     }
 }
 
-fn label_address(pc: PcRead, addr: u32, offset: i64) -> u32 {
-    pc.target(addr as u64, offset, 32) as u32
-}
+fn label_address(pc: PcRead, addr: u32, offset: i64) -> u32 { pc.target(addr as u64, offset, 32) as u32 }
 
 fn mem_address(mem: Mem, regs: &RegContext, thumb: bool) -> u32 {
     let base = reg_value(mem.base, regs);
-    let base = if thumb && mem.base.num() == 15 {
-        base & !3
-    } else {
-        base
-    };
+    let base = if thumb && mem.base.num() == 15 { base & !3 } else { base };
 
     if mem.writeback == Writeback::Post {
         return base;

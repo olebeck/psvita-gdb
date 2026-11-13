@@ -19,22 +19,19 @@ pub trait MemReader {
 
     fn read_u8(&self, addr: u32) -> Result<u8, NextPcError> {
         let mut bytes = [0; 1];
-        self.read(addr as usize, &mut bytes)
-            .ok_or(NextPcError::MemoryRead)?;
+        self.read(addr as usize, &mut bytes).ok_or(NextPcError::MemoryRead)?;
         Ok(bytes[0])
     }
 
     fn read_u16(&self, addr: u32) -> Result<u16, NextPcError> {
         let mut bytes = [0; 2];
-        self.read(addr as usize, &mut bytes)
-            .ok_or(NextPcError::MemoryRead)?;
+        self.read(addr as usize, &mut bytes).ok_or(NextPcError::MemoryRead)?;
         Ok(u16::from_le_bytes(bytes))
     }
 
     fn read_u32(&self, addr: u32) -> Result<u32, NextPcError> {
         let mut bytes = [0; 4];
-        self.read(addr as usize, &mut bytes)
-            .ok_or(NextPcError::MemoryRead)?;
+        self.read(addr as usize, &mut bytes).ok_or(NextPcError::MemoryRead)?;
         Ok(u32::from_le_bytes(bytes))
     }
 }
@@ -50,9 +47,7 @@ pub struct RegContext {
 }
 
 impl RegContext {
-    fn thumb(&self) -> bool {
-        (self.cpsr >> 5) & 1 != 0
-    }
+    fn thumb(&self) -> bool { (self.cpsr >> 5) & 1 != 0 }
 
     fn reg(&self, idx: u8) -> u32 {
         match idx {

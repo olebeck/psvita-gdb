@@ -38,16 +38,9 @@ pub fn fixup_netrecv_bug() -> Result<(), SceError> {
         ..unsafe { zeroed() }
     };
     sce_call!(ksceKernelGetModuleInfo(0x10005, netps_id, &raw mut info))?;
-    let text = unsafe {
-        core::slice::from_raw_parts(
-            info.segments[0].vaddr as *const u8,
-            info.segments[0].memsz as usize,
-        )
-    };
-    let Some(offset) = text
-        .windows(ORIG_CODE.len())
-        .position(|window| window == &ORIG_CODE)
-    else {
+    let text =
+        unsafe { core::slice::from_raw_parts(info.segments[0].vaddr as *const u8, info.segments[0].memsz as usize) };
+    let Some(offset) = text.windows(ORIG_CODE.len()).position(|window| window == &ORIG_CODE) else {
         println!("fixup_netrecv_bug: orig code not found");
         return Ok(());
     };

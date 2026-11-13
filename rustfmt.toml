@@ -1,0 +1,6 @@
+edition = "2024"
+unstable_features = true
+
+fn_single_line = true
+fn_call_width = 80
+max_width = 120

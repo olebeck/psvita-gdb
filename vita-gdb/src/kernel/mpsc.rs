@@ -42,12 +42,10 @@ impl<T, const CAP: usize> MpscRing<T, CAP> {
             let turn = slot.turn.load(Ordering::Acquire);
 
             if turn == (head / CAP).wrapping_mul(2) {
-                match self.head.compare_exchange_weak(
-                    head,
-                    head.wrapping_add(1),
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                ) {
+                match self
+                    .head
+                    .compare_exchange_weak(head, head.wrapping_add(1), Ordering::Relaxed, Ordering::Relaxed)
+                {
                     Ok(_) => {
                         unsafe { (*slot.val.get()).write(item) };
                         slot.turn.store(turn.wrapping_add(1), Ordering::Release);
@@ -80,9 +78,7 @@ impl<T, const CAP: usize> MpscRing<T, CAP> {
         Some(item)
     }
 
-    pub unsafe fn clear(&self) {
-        while unsafe { self.pop() }.is_some() {}
-    }
+    pub unsafe fn clear(&self) { while unsafe { self.pop() }.is_some() {} }
 
     pub fn len(&self) -> usize {
         let tail = self.tail.load(Ordering::Acquire);
@@ -90,13 +86,9 @@ impl<T, const CAP: usize> MpscRing<T, CAP> {
         head.wrapping_sub(tail).min(CAP)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
 }
 
 impl<T, const CAP: usize> Drop for MpscRing<T, CAP> {
-    fn drop(&mut self) {
-        while unsafe { self.pop() }.is_some() {}
-    }
+    fn drop(&mut self) { while unsafe { self.pop() }.is_some() {} }
 }

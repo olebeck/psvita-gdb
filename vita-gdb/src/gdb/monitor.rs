@@ -8,9 +8,9 @@ use crate::{
     kernel::{
         syscon::{SYSCON_COLD_RESET, syscon_cmd},
         utils::{
-            SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info,
-            get_process_ids, get_process_status, get_process_titleid, get_thread_ids,
-            get_thread_info, name_to_str, phys_dump, phys_read32, phys_write32,
+            SceError, get_memblock_ids, get_memblock_info, get_module_ids, get_module_info, get_process_ids,
+            get_process_status, get_process_titleid, get_thread_ids, get_thread_info, name_to_str, phys_dump,
+            phys_read32, phys_write32,
         },
     },
     mep::{mep_dump, mep_read32, mep_write32},
@@ -19,10 +19,7 @@ use crate::{
 
 fn parse_num(target: &str) -> Option<u32> {
     let target = target.trim();
-    if let Some(hex) = target
-        .strip_prefix("0x")
-        .or_else(|| target.strip_prefix("0X"))
-    {
+    if let Some(hex) = target.strip_prefix("0x").or_else(|| target.strip_prefix("0X")) {
         u32::from_str_radix(hex, 16).ok()
     } else {
         target.parse::<u32>().ok()
@@ -54,11 +51,7 @@ enum PeekType {
 }
 
 impl MonitorCmd for VitaTarget {
-    fn handle_monitor_cmd(
-        &mut self,
-        cmd: &[u8],
-        mut out: ConsoleOutput<'_>,
-    ) -> Result<(), SceError> {
+    fn handle_monitor_cmd(&mut self, cmd: &[u8], mut out: ConsoleOutput<'_>) -> Result<(), SceError> {
         let Ok(cmd) = core::str::from_utf8(cmd) else {
             gdbstub::outputln!(out, "command must be valid UTF-8");
             return Ok(());
@@ -87,11 +80,7 @@ impl MonitorCmd for VitaTarget {
 }
 
 impl VitaTarget {
-    fn cmd_help(
-        &mut self,
-        _args: &mut SplitAsciiWhitespace<'_>,
-        mut out: ConsoleOutput<'_>,
-    ) -> Result<(), SceError> {
+    fn cmd_help(&mut self, _args: &mut SplitAsciiWhitespace<'_>, mut out: ConsoleOutput<'_>) -> Result<(), SceError> {
         gdbstub::outputln!(out, "ps                       Print a list of processes");
         gdbstub::outputln!(out, "ls process               Print a list of processes");
         gdbstub::outputln!(out, "ls thread <pid|titleid>  Print a list of threads");
@@ -105,11 +94,7 @@ impl VitaTarget {
         Ok(())
     }
 
-    fn cmd_ls(
-        &mut self,
-        args: &mut SplitAsciiWhitespace<'_>,
-        mut out: ConsoleOutput<'_>,
-    ) -> Result<(), SceError> {
+    fn cmd_ls(&mut self, args: &mut SplitAsciiWhitespace<'_>, mut out: ConsoleOutput<'_>) -> Result<(), SceError> {
         match args.next() {
             Some("process") => self.cmd_ls_process(out),
             Some("thread") => self.cmd_ls_thread(args, out),
@@ -220,12 +205,7 @@ impl VitaTarget {
             };
             let name = name_to_str(&info.name).unwrap_or("<invalid>");
             gdbstub::output!(out, "  0x{tid:<9x} {:<32}", name);
-            gdbstub::outputln!(
-                out,
-                "prio {:<3} status 0x{:x}",
-                info.initPriority,
-                info.status
-            );
+            gdbstub::outputln!(out, "prio {:<3} status 0x{:x}", info.initPriority, info.status);
         }
         Ok(())
     }
@@ -259,21 +239,12 @@ impl VitaTarget {
             };
             let name = name_to_str(&info.module_name).unwrap_or("<invalid>");
             let path = name_to_str(&info.path).unwrap_or("<invalid>");
-            gdbstub::outputln!(
-                out,
-                "0x{modid:<9x} {:<32} state=0x{:x} {path}",
-                name,
-                info.state
-            );
+            gdbstub::outputln!(out, "0x{modid:<9x} {:<32} state=0x{:x} {path}", name, info.state);
         }
         Ok(())
     }
 
-    fn cmd_info(
-        &mut self,
-        args: &mut SplitAsciiWhitespace<'_>,
-        mut out: ConsoleOutput<'_>,
-    ) -> Result<(), SceError> {
+    fn cmd_info(&mut self, args: &mut SplitAsciiWhitespace<'_>, mut out: ConsoleOutput<'_>) -> Result<(), SceError> {
         match args.next() {
             Some("process") => self.cmd_info_process(args, out),
             Some("thread") => self.cmd_info_thread(args, out),
@@ -346,24 +317,14 @@ impl VitaTarget {
         }
         gdbstub::outputln!(out, "stack      0x{:x}", info.stack as u32);
         gdbstub::outputln!(out, "stack size 0x{:x}", info.stackSize);
-        gdbstub::outputln!(
-            out,
-            "priority  initial={} current={}",
-            info.initPriority,
-            info.currentPriority
-        );
+        gdbstub::outputln!(out, "priority  initial={} current={}", info.initPriority, info.currentPriority);
         gdbstub::outputln!(
             out,
             "cpu       current={} affinity=0x{:x}",
             info.currentCpuId,
             info.currentCpuAffinityMask
         );
-        gdbstub::outputln!(
-            out,
-            "wait      type=0x{:x} id={}",
-            info.waitType,
-            info.waitId
-        );
+        gdbstub::outputln!(out, "wait      type=0x{:x} id={}", info.waitType, info.waitId);
         gdbstub::outputln!(out, "exit status {}", info.exitStatus);
         Ok(())
     }
@@ -401,20 +362,11 @@ impl VitaTarget {
             info.core_info.alloc_map_size
         );
         gdbstub::outputln!(out, "partition  {}", info.core_info.partition_guid);
-        for i in 0..(info.physical_range_count_written as usize).min(info.physical_addresses.len())
-        {
-            let (Some(paddr), Some(psize)) =
-                (info.physical_addresses.get(i), info.physical_sizes.get(i))
-            else {
+        for i in 0..(info.physical_range_count_written as usize).min(info.physical_addresses.len()) {
+            let (Some(paddr), Some(psize)) = (info.physical_addresses.get(i), info.physical_sizes.get(i)) else {
                 continue;
             };
-            gdbstub::outputln!(
-                out,
-                "physical[{}] base=0x{:x} size=0x{:x}",
-                i,
-                *paddr as u32,
-                *psize
-            );
+            gdbstub::outputln!(out, "physical[{}] base=0x{:x} size=0x{:x}", i, *paddr as u32, *psize);
         }
         Ok(())
     }
@@ -447,19 +399,9 @@ impl VitaTarget {
         gdbstub::outputln!(out, "  state=0x{:x}", info.state);
 
         let text = &info.segments[0];
-        gdbstub::outputln!(
-            out,
-            "  text=0x{:08x} size=0x{:x}",
-            text.vaddr as u32,
-            text.memsz,
-        );
+        gdbstub::outputln!(out, "  text=0x{:08x} size=0x{:x}", text.vaddr as u32, text.memsz,);
         let data = &info.segments[1];
-        gdbstub::outputln!(
-            out,
-            "  data=0x{:08x} size=0x{:x}",
-            data.vaddr as u32,
-            data.memsz,
-        );
+        gdbstub::outputln!(out, "  data=0x{:08x} size=0x{:x}", data.vaddr as u32, data.memsz,);
         Ok(())
     }
 
@@ -537,11 +479,7 @@ impl VitaTarget {
         Ok(())
     }
 
-    fn cmd_reset(
-        &mut self,
-        _args: &mut SplitAsciiWhitespace<'_>,
-        mut out: ConsoleOutput<'_>,
-    ) -> Result<(), SceError> {
+    fn cmd_reset(&mut self, _args: &mut SplitAsciiWhitespace<'_>, mut out: ConsoleOutput<'_>) -> Result<(), SceError> {
         if let Err(err) = syscon_cmd(SYSCON_COLD_RESET) {
             gdbstub::outputln!(out, "{err}");
         }
@@ -551,11 +489,6 @@ impl VitaTarget {
 
 fn hex_dump(out: &mut ConsoleOutput<'_>, base: u32, p: &[u32]) {
     for (i, value) in p.iter().enumerate() {
-        gdbstub::outputln!(
-            out,
-            "0x{:08x}: 0x{:08x}",
-            base.wrapping_add((i as u32).wrapping_mul(4)),
-            value
-        );
+        gdbstub::outputln!(out, "0x{:08x}: 0x{:08x}", base.wrapping_add((i as u32).wrapping_mul(4)), value);
     }
 }

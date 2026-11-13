@@ -1,8 +1,8 @@
 use core::mem;
 
 use vitasdk_sys::{
-    SCE_SYSCON_PACKET_TX_CMD_HI, SCE_SYSCON_PACKET_TX_CMD_LO, SCE_SYSCON_PACKET_TX_LENGTH,
-    SceSysconPacket, ksceSysconCmdExec,
+    SCE_SYSCON_PACKET_TX_CMD_HI, SCE_SYSCON_PACKET_TX_CMD_LO, SCE_SYSCON_PACKET_TX_LENGTH, SceSysconPacket,
+    ksceSysconCmdExec,
 };
 
 use crate::{kernel::utils::SceError, sce_call};

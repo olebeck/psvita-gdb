@@ -1,8 +1,8 @@
 use core::ffi::c_void;
 
 use vitasdk_sys::{
-    SceArmCpuRegisters, SceClass, SceExcpHandlingCode, SceExcpKind, SceExcpmgrExceptionContext,
-    SceKernelModuleInfo, SceKernelThreadContextInfo, SceUID,
+    SceArmCpuRegisters, SceClass, SceExcpHandlingCode, SceExcpKind, SceExcpmgrExceptionContext, SceKernelModuleInfo,
+    SceKernelThreadContextInfo, SceUID,
 };
 
 fn stub_is_invalid(ptr: *const c_void) -> bool {
@@ -155,13 +155,9 @@ pub struct SysrootDbgpHandler {
     pub processStart: Option<unsafe extern "C" fn(ppid: SceUID, pid: SceUID, time: u64) -> i32>,
     pub processExit: Option<unsafe extern "C" fn(pid: SceUID, exitStatus: i32, time: u64) -> i32>,
     pub processKill: Option<unsafe extern "C" fn(pid: SceUID, time: u64) -> i32>,
-    pub processSpontaneousExit:
-        Option<unsafe extern "C" fn(pid: SceUID, status: u32, time: u64) -> i32>,
-    pub processExitToSpawn:
-        Option<unsafe extern "C" fn(pid: SceUID, spawnPid: SceUID, time: u64) -> i32>,
-    pub exitSpawn: Option<
-        unsafe extern "C" fn(pid: SceUID, spawnPid: SceUID, prevPid: SceUID, time: u64) -> i32,
-    >,
+    pub processSpontaneousExit: Option<unsafe extern "C" fn(pid: SceUID, status: u32, time: u64) -> i32>,
+    pub processExitToSpawn: Option<unsafe extern "C" fn(pid: SceUID, spawnPid: SceUID, time: u64) -> i32>,
+    pub exitSpawn: Option<unsafe extern "C" fn(pid: SceUID, spawnPid: SceUID, prevPid: SceUID, time: u64) -> i32>,
     pub processSuspend: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
     pub processResume: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
     pub appAbort: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
@@ -171,8 +167,7 @@ pub struct SysrootDbgpHandler {
     pub isPsButtonCaptured: Option<unsafe extern "C" fn() -> i32>,
     pub swBkptGetOriginalOpcode:
         Option<unsafe extern "C" fn(pid: SceUID, address: *mut c_void, opcode: *mut u32) -> i32>,
-    pub codeModified:
-        Option<unsafe extern "C" fn(pid: SceUID, address: u32, instruction: u32) -> i32>,
+    pub codeModified: Option<unsafe extern "C" fn(pid: SceUID, address: u32, instruction: u32) -> i32>,
     pub getPrxDebugFlag: Option<unsafe extern "C" fn(pid: SceUID, flag: *mut u32) -> i32>,
     pub suspendProcessAndWaitResume:
         Option<unsafe extern "C" fn(pid: SceUID, modid: SceUID, stopReason: u32, time: u64) -> i32>,
@@ -180,16 +175,9 @@ pub struct SysrootDbgpHandler {
     pub enableWatchpoint: Option<unsafe extern "C" fn(ops: *const SysrootDbgpHandler) -> i32>,
     pub disableWatchpoint: Option<unsafe extern "C" fn(ops: *const SysrootDbgpHandler) -> i32>,
     pub updateUlobjmgrFlagForDbgp: Option<
-        unsafe extern "C" fn(
-            dbgp: *mut c_void,
-            process: *mut c_void,
-            set: u32,
-            clear: u32,
-            flag: *mut u32,
-        ) -> i32,
+        unsafe extern "C" fn(dbgp: *mut c_void, process: *mut c_void, set: u32, clear: u32, flag: *mut u32) -> i32,
     >,
-    pub updateUlobjmgrFlagForLibfiber:
-        Option<unsafe extern "C" fn(pid: SceUID, flag: *mut u32) -> i32>,
+    pub updateUlobjmgrFlagForLibfiber: Option<unsafe extern "C" fn(pid: SceUID, flag: *mut u32) -> i32>,
 }
 
 libstub_ver!(SceSysmemForKernel, 0x63A519E5, 0x02451F0F,
@@ -217,10 +205,7 @@ libstub_ver!(SceDebugForKernel, 0x88C17370, 0x13D793B7,
     (0x82D2EDCE, 0x2AABAEDA, ksceKernelDebugPutchar(char: i32) -> i32)
 );
 
-type ExcpHandler = unsafe extern "C" fn(
-    *mut SceExcpmgrExceptionContext,
-    SceExcpHandlingCode,
-) -> SceExcpHandlingCode;
+type ExcpHandler = unsafe extern "C" fn(*mut SceExcpmgrExceptionContext, SceExcpHandlingCode) -> SceExcpHandlingCode;
 libstub_ver!(SceExcpmgrForKernel, 0x4CA0FDD5, 0x1496A5B5,
     (0x03499636, 0x00063675, ksceExcpmgrRegisterHandler(kind: SceExcpKind, priority: i32, handler: ExcpHandler) -> i32)
 );
@@ -253,9 +238,7 @@ unsafe extern "C" {
 }
 vitastub!(SKPLForKernel, spl_exec_code, 0x18, 0x9fce5cbf, 0x4b856e73);
 
-pub fn spl_is_loaded() -> bool {
-    !stub_is_invalid(spl_exec_code as _)
-}
+pub fn spl_is_loaded() -> bool { !stub_is_invalid(spl_exec_code as _) }
 
 // staiForKernel
 unsafe extern "C" {
@@ -265,6 +248,4 @@ unsafe extern "C" {
 vitastub!(staiForKernel, staiCowWrite, 0x18, 0xFF0B8551, 0xFB9158E4);
 vitastub!(staiForKernel, staiCowRelease, 0x18, 0xFF0B8551, 0x1138785D);
 
-pub fn stai_is_loaded() -> bool {
-    !stub_is_invalid(staiCowWrite as _)
-}
+pub fn stai_is_loaded() -> bool { !stub_is_invalid(staiCowWrite as _) }

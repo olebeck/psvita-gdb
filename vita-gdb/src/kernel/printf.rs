@@ -1,8 +1,7 @@
 use core::fmt;
 
 use vitasdk_sys::{
-    SceKernelIntrStatus, ksceKernelSpinlockLowLockCpuSuspendIntr,
-    ksceKernelSpinlockLowUnlockCpuResumeIntr,
+    SceKernelIntrStatus, ksceKernelSpinlockLowLockCpuSuspendIntr, ksceKernelSpinlockLowUnlockCpuResumeIntr,
 };
 
 use crate::kernel::ffi::ksceKernelDebugPutchar;
@@ -14,11 +13,7 @@ pub struct PrintlnGuard {
 }
 
 impl Drop for PrintlnGuard {
-    fn drop(&mut self) {
-        unsafe {
-            ksceKernelSpinlockLowUnlockCpuResumeIntr(&raw mut PRINTLN_LOCK, self.intr_status)
-        };
-    }
+    fn drop(&mut self) { unsafe { ksceKernelSpinlockLowUnlockCpuResumeIntr(&raw mut PRINTLN_LOCK, self.intr_status) }; }
 }
 
 pub fn lock_println() -> PrintlnGuard {

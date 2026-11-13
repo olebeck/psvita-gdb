@@ -1,8 +1,8 @@
 use core::{ffi::CStr, ptr::null_mut};
 
 use vitasdk_sys::{
-    SceUID, ksceKernelClearEventFlag, ksceKernelCreateEventFlag, ksceKernelDeleteEventFlag,
-    ksceKernelSetEventFlag, ksceKernelWaitEventFlag,
+    SceUID, ksceKernelClearEventFlag, ksceKernelCreateEventFlag, ksceKernelDeleteEventFlag, ksceKernelSetEventFlag,
+    ksceKernelWaitEventFlag,
 };
 
 use crate::{kernel::utils::SceError, println, sce_call};
@@ -17,8 +17,7 @@ pub struct EventFlagRef {
 impl EventFlagRef {
     pub fn set(&self, bits: u32) -> Result<(), SceError> {
         //println!("ksceKernelSetEventFlag({}, {bits:b})", self.evfid);
-        sce_call!(ksceKernelSetEventFlag(self.evfid, bits))
-            .inspect_err(|err| println!("set: {err}"))?;
+        sce_call!(ksceKernelSetEventFlag(self.evfid, bits)).inspect_err(|err| println!("set: {err}"))?;
         Ok(())
     }
 
@@ -31,14 +30,8 @@ impl EventFlagRef {
     pub fn wait(&self, bits: u32, wait: u32) -> Result<u32, SceError> {
         //println!("ksceKernelWaitEventFlag({}, {bits:b})", self.evfid);
         let mut out: u32 = 0;
-        sce_call!(ksceKernelWaitEventFlag(
-            self.evfid,
-            bits,
-            wait,
-            &mut out,
-            null_mut()
-        ))
-        .inspect_err(|err| println!("wait: {err}"))?;
+        sce_call!(ksceKernelWaitEventFlag(self.evfid, bits, wait, &mut out, null_mut()))
+            .inspect_err(|err| println!("wait: {err}"))?;
         //println!("woke: out={out:b} bits={bits:b}");
         Ok(out)
     }
@@ -59,9 +52,7 @@ impl EventFlag {
         Ok(Self { evfid })
     }
 
-    pub fn as_ref(&self) -> EventFlagRef {
-        EventFlagRef { evfid: self.evfid }
-    }
+    pub fn as_ref(&self) -> EventFlagRef { EventFlagRef { evfid: self.evfid } }
 
     pub fn delete(&mut self) -> Result<(), SceError> {
         if self.evfid != 0 {
@@ -73,7 +64,5 @@ impl EventFlag {
 }
 
 impl Drop for EventFlag {
-    fn drop(&mut self) {
-        let _ = self.delete();
-    }
+    fn drop(&mut self) { let _ = self.delete(); }
 }

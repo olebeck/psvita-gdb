@@ -8,15 +8,9 @@ mod tests {
     }
 
     impl TestMemory {
-        fn new() -> Self {
-            Self {
-                regions: Vec::new(),
-            }
-        }
+        fn new() -> Self { Self { regions: Vec::new() } }
 
-        fn add(&mut self, base: usize, bytes: &[u8]) {
-            self.regions.push((base, bytes.to_vec()));
-        }
+        fn add(&mut self, base: usize, bytes: &[u8]) { self.regions.push((base, bytes.to_vec())); }
     }
 
     impl MemReader for TestMemory {
@@ -562,10 +556,7 @@ mod tests {
 
         regs.r[0] = 0x2000;
 
-        assert!(matches!(
-            next_pc(&regs, &memory),
-            Err(NextPcError::MemoryRead)
-        ));
+        assert!(matches!(next_pc(&regs, &memory), Err(NextPcError::MemoryRead)));
     }
 
     #[test]

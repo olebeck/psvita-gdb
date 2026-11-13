@@ -6,9 +6,9 @@ use core::{
 };
 
 use vitasdk_sys::{
-    SCE_KERNEL_THREAD_CPU_AFFINITY_MASK_DEFAULT, SceKernelThreadEntry, SceUID,
-    ksceKernelCreateThread, ksceKernelDelayThread, ksceKernelDeleteThread,
-    ksceKernelExitDeleteThread, ksceKernelStartThread, ksceKernelWaitThreadEnd,
+    SCE_KERNEL_THREAD_CPU_AFFINITY_MASK_DEFAULT, SceKernelThreadEntry, SceUID, ksceKernelCreateThread,
+    ksceKernelDelayThread, ksceKernelDeleteThread, ksceKernelExitDeleteThread, ksceKernelStartThread,
+    ksceKernelWaitThreadEnd,
 };
 
 use crate::{kernel::utils::SceError, sce_call};
@@ -99,12 +99,7 @@ pub struct DetachedThread<T> {
 
 impl<T: 'static> DetachedThread<T> {
     pub fn create(name: &CStr, priority: u32, stack_size: usize) -> Result<Self, SceError> {
-        let thid = create_thread(
-            name,
-            Some(thread_trampoline_delete::<T>),
-            priority,
-            stack_size,
-        )?;
+        let thid = create_thread(name, Some(thread_trampoline_delete::<T>), priority, stack_size)?;
         Ok(Self {
             thid,
             _marker: PhantomData,
@@ -120,6 +115,4 @@ impl<T: 'static> DetachedThread<T> {
     }
 }
 
-pub fn delay_thread(delay: u32) {
-    unsafe { ksceKernelDelayThread(delay) };
-}
+pub fn delay_thread(delay: u32) { unsafe { ksceKernelDelayThread(delay) }; }

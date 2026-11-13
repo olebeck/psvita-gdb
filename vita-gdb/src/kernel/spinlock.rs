@@ -40,15 +40,11 @@ impl<T> Spinlock<T> {
 
 impl<T> Deref for SpinlockGuard<'_, T> {
     type Target = T;
-    fn deref(&self) -> &T {
-        unsafe { &*self.lock.data.get() }
-    }
+    fn deref(&self) -> &T { unsafe { &*self.lock.data.get() } }
 }
 
 impl<T> DerefMut for SpinlockGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.lock.data.get() }
-    }
+    fn deref_mut(&mut self) -> &mut T { unsafe { &mut *self.lock.data.get() } }
 }
 
 impl<T> Drop for SpinlockGuard<'_, T> {

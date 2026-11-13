@@ -4,9 +4,9 @@ use core::{
 };
 
 use vitasdk_sys::{
-    SCE_NET_AF_INET, SCE_NET_IPPROTO_TCP, SCE_NET_SOCK_STREAM, SCE_NET_TCP_NODELAY, SceNetInAddr,
-    SceNetSockaddr, SceNetSockaddrIn, ksceNetAccept, ksceNetBind, ksceNetClose, ksceNetListen,
-    ksceNetSendto, ksceNetSetsockopt, ksceNetSocket,
+    SCE_NET_AF_INET, SCE_NET_IPPROTO_TCP, SCE_NET_SOCK_STREAM, SCE_NET_TCP_NODELAY, SceNetInAddr, SceNetSockaddr,
+    SceNetSockaddrIn, ksceNetAccept, ksceNetBind, ksceNetClose, ksceNetListen, ksceNetSendto, ksceNetSetsockopt,
+    ksceNetSocket,
 };
 
 use crate::{kernel::utils::SceError, sce_call};
@@ -15,20 +15,11 @@ pub struct TcpSocket(i32);
 
 impl TcpSocket {
     pub fn send(&self, buf: &[u8]) -> Result<usize, SceError> {
-        let n = sce_call!(ksceNetSendto(
-            self.raw(),
-            buf.as_ptr() as _,
-            buf.len() as _,
-            0,
-            null(),
-            0
-        ))?;
+        let n = sce_call!(ksceNetSendto(self.raw(), buf.as_ptr() as _, buf.len() as _, 0, null(), 0))?;
         Ok(n as usize)
     }
 
-    pub fn raw(&self) -> i32 {
-        self.0
-    }
+    pub fn raw(&self) -> i32 { self.0 }
 
     pub fn close(&mut self) {
         if self.0 >= 0 {
@@ -39,9 +30,7 @@ impl TcpSocket {
 }
 
 impl Drop for TcpSocket {
-    fn drop(&mut self) {
-        self.close();
-    }
+    fn drop(&mut self) { self.close(); }
 }
 
 pub struct TcpListener {
@@ -93,7 +82,5 @@ impl TcpListener {
 }
 
 impl Drop for TcpListener {
-    fn drop(&mut self) {
-        self.close();
-    }
+    fn drop(&mut self) { self.close(); }
 }

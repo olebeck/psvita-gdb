@@ -8,8 +8,8 @@ use gdbstub::{
         ext::{
             base::{
                 multithread::{
-                    MultiThreadBase, MultiThreadResume, MultiThreadResumeOps,
-                    MultiThreadSingleStep, MultiThreadSingleStepOps,
+                    MultiThreadBase, MultiThreadResume, MultiThreadResumeOps, MultiThreadSingleStep,
+                    MultiThreadSingleStepOps,
                 },
                 single_register_access::{SingleRegisterAccess, SingleRegisterAccessOps},
             },
@@ -29,13 +29,10 @@ use crate::{
         target::VitaTarget,
     },
     kernel::{
-        ffi::{
-            ksceKernelResumeProcess, ksceKernelSetThreadCpuRegisters,
-            ksceKernelSetVfpRegisterForDebugger,
-        },
+        ffi::{ksceKernelResumeProcess, ksceKernelSetThreadCpuRegisters, ksceKernelSetVfpRegisterForDebugger},
         utils::{
-            PROCESS_STATUS_SUSPENDED, SceError, get_process_status, get_thread_ids,
-            get_thread_info, name_to_str, read_user_process, str_to_buf, write_user_text,
+            PROCESS_STATUS_SUSPENDED, SceError, get_process_status, get_thread_ids, get_thread_info, name_to_str,
+            read_user_process, str_to_buf, write_user_text,
         },
     },
     println, sce_call,
@@ -98,10 +95,7 @@ impl MultiThreadBase for VitaTarget {
         regs.fpscr = th_regs.fpscr;
 
         regs.d = [0x7ff8dead7f80deadu64; 32];
-        match sce_call!(ksceKernelGetVfpRegisterForDebugger(
-            tid,
-            &raw mut regs.d as _
-        )) {
+        match sce_call!(ksceKernelGetVfpRegisterForDebugger(tid, &raw mut regs.d as _)) {
             Ok(_) => (),
             Err(err) if err.code == 0x80020008u32 as i32 => (),
             Err(err) => {
@@ -159,10 +153,7 @@ impl MultiThreadBase for VitaTarget {
             return Err(TargetError::NonFatal);
         }
 
-        if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(
-            tid,
-            &regs.d as *const _ as _
-        )) {
+        if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(tid, &regs.d as *const _ as _)) {
             println!("write_registers {err} tid={tid}");
             return Err(TargetError::NonFatal);
         }
@@ -170,12 +161,7 @@ impl MultiThreadBase for VitaTarget {
         Ok(())
     }
 
-    fn read_addrs(
-        &mut self,
-        start_addr: u32,
-        data: &mut [u8],
-        _tid: Tid,
-    ) -> TargetResult<usize, Self> {
+    fn read_addrs(&mut self, start_addr: u32, data: &mut [u8], _tid: Tid) -> TargetResult<usize, Self> {
         let Some(pid) = self.pid() else {
             return Err(TargetError::NonFatal);
         };
@@ -198,10 +184,7 @@ impl MultiThreadBase for VitaTarget {
     }
 
     #[inline(always)]
-    fn list_active_threads(
-        &mut self,
-        thread_is_active: &mut dyn FnMut(Tid),
-    ) -> Result<(), Self::Error> {
+    fn list_active_threads(&mut self, thread_is_active: &mut dyn FnMut(Tid)) -> Result<(), Self::Error> {
         let Some(pid) = self.pid() else {
             return Ok(());
         };
@@ -219,19 +202,13 @@ impl MultiThreadBase for VitaTarget {
     }
 
     #[inline(always)]
-    fn support_resume(&mut self) -> Option<MultiThreadResumeOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_resume(&mut self) -> Option<MultiThreadResumeOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_thread_extra_info(&mut self) -> Option<ThreadExtraInfoOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_thread_extra_info(&mut self) -> Option<ThreadExtraInfoOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_single_register_access(&mut self) -> Option<SingleRegisterAccessOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_single_register_access(&mut self) -> Option<SingleRegisterAccessOps<'_, Self>> { Some(self) }
 }
 
 impl MemReader for VitaTarget {
@@ -314,11 +291,7 @@ impl MultiThreadResume for VitaTarget {
         Ok(())
     }
 
-    fn set_resume_action_continue(
-        &mut self,
-        tid: Option<Tid>,
-        signal: Option<Signal>,
-    ) -> Result<(), Self::Error> {
+    fn set_resume_action_continue(&mut self, tid: Option<Tid>, signal: Option<Signal>) -> Result<(), Self::Error> {
         if signal.is_some() {
             return Err(SceError::new(-1, "set_resume_action_continue"));
         }
@@ -332,9 +305,7 @@ impl MultiThreadResume for VitaTarget {
     }
 
     #[inline(always)]
-    fn support_single_step(&mut self) -> Option<MultiThreadSingleStepOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_single_step(&mut self) -> Option<MultiThreadSingleStepOps<'_, Self>> { Some(self) }
 }
 
 impl VitaTarget {
@@ -379,11 +350,7 @@ impl VitaTarget {
 }
 
 impl MultiThreadSingleStep for VitaTarget {
-    fn set_resume_action_step(
-        &mut self,
-        tid: Tid,
-        signal: Option<Signal>,
-    ) -> Result<(), Self::Error> {
+    fn set_resume_action_step(&mut self, tid: Tid, signal: Option<Signal>) -> Result<(), Self::Error> {
         if signal.is_some() {
             return Err(SceError::new(-1, "set_resume_action_step"));
         }
@@ -422,12 +389,7 @@ fn get_vfp_registers(tid: SceUID) -> Result<[u64; 32], SceError> {
 }
 
 impl SingleRegisterAccess for VitaTarget {
-    fn read_register(
-        &mut self,
-        tid: Tid,
-        reg_id: Armv7RegId,
-        buf: &mut [u8],
-    ) -> TargetResult<usize, Self> {
+    fn read_register(&mut self, tid: Tid, reg_id: Armv7RegId, buf: &mut [u8]) -> TargetResult<usize, Self> {
         if self.session.is_none() {
             return Err(TargetError::NonFatal);
         }
@@ -494,12 +456,7 @@ impl SingleRegisterAccess for VitaTarget {
         Ok(buf.len())
     }
 
-    fn write_register(
-        &mut self,
-        tid: Tid,
-        reg_id: Armv7RegId,
-        val: &[u8],
-    ) -> TargetResult<(), Self> {
+    fn write_register(&mut self, tid: Tid, reg_id: Armv7RegId, val: &[u8]) -> TargetResult<(), Self> {
         let tid = tid.get() as SceUID;
         println!("write_register: tid={tid} reg_id={reg_id:?} val={val:?}");
 
@@ -518,10 +475,7 @@ impl SingleRegisterAccess for VitaTarget {
                 return Err(TargetError::NonFatal);
             };
             *reg = value;
-            if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(
-                tid,
-                vfp.as_ptr() as *const _
-            )) {
+            if let Err(err) = sce_call!(ksceKernelSetVfpRegisterForDebugger(tid, vfp.as_ptr() as *const _)) {
                 println!("write_register {err} tid={tid}");
                 return Err(TargetError::NonFatal);
             }

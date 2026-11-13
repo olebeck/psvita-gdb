@@ -9,9 +9,7 @@ use vitasdk_sys::{SCE_EVENT_WAITCLEAR_PAT, ksceNetRecvfrom};
 
 use crate::{
     gdb::sessions::{EV_WAKE_READER, EV_WAKE_WORKER},
-    kernel::{
-        event_flag::EventFlagRef, tcp_socket::TcpSocket, thread::JoinableThread, utils::SceError,
-    },
+    kernel::{event_flag::EventFlagRef, tcp_socket::TcpSocket, thread::JoinableThread, utils::SceError},
     println, sce_call,
 };
 
@@ -62,9 +60,7 @@ fn acquire_state() -> Option<&'static ConnState> {
     None
 }
 
-fn release_state(state: &'static ConnState) {
-    state.claimed.store(false, Ordering::Release);
-}
+fn release_state(state: &'static ConnState) { state.claimed.store(false, Ordering::Release); }
 
 pub enum ReadResult {
     Byte(u8),
@@ -182,9 +178,7 @@ impl TcpConn {
 }
 
 impl Drop for TcpConn {
-    fn drop(&mut self) {
-        self.close();
-    }
+    fn drop(&mut self) { self.close(); }
 }
 
 impl Connection for TcpConn {
@@ -204,9 +198,7 @@ impl Connection for TcpConn {
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.flush_write_buffer()
-    }
+    fn flush(&mut self) -> Result<(), Self::Error> { self.flush_write_buffer() }
 }
 
 type NetRxArg = (i32, EventFlagRef, &'static ConnState);

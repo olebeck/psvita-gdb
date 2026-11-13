@@ -3,10 +3,9 @@ use core::ptr::null_mut;
 
 use gdbstub::target::ext::breakpoints::WatchKind;
 use vitasdk_sys::{
-    SCE_EXCP_DABT, SCE_EXCP_PABT, SCE_EXCP_UNDEF_INSTRUCTION,
-    SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2, SCE_EXCPMGR_EXCEPTION_NOT_HANDLED, SceExcpHandlingCode,
-    SceExcpmgrExceptionContext, SceUID, ksceKernelChangeThreadSuspendStatus,
-    ksceKernelRegisterSysEventHandler,
+    SCE_EXCP_DABT, SCE_EXCP_PABT, SCE_EXCP_UNDEF_INSTRUCTION, SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2,
+    SCE_EXCPMGR_EXCEPTION_NOT_HANDLED, SceExcpHandlingCode, SceExcpmgrExceptionContext, SceUID,
+    ksceKernelChangeThreadSuspendStatus, ksceKernelRegisterSysEventHandler,
 };
 
 use crate::cp14::enable_debug;
@@ -25,9 +24,7 @@ fn halt_for_debug(pid: SceUID, tid: SceUID) {
     unsafe { ksceKernelSuspendProcess(pid, PROCESS_HALT_STATUS) };
 }
 
-const fn dfsr_is_write(dfsr: u32) -> bool {
-    dfsr & (1 << 11) != 0
-}
+const fn dfsr_is_write(dfsr: u32) -> bool { dfsr & (1 << 11) != 0 }
 
 fn is_bkpt(insn: &[u8; 4], thumb: bool) -> bool {
     let word = u32::from_le_bytes(*insn);
@@ -38,13 +35,9 @@ fn is_bkpt(insn: &[u8; 4], thumb: bool) -> bool {
     }
 }
 
-fn fsr_is_debug(fsr: u32) -> bool {
-    (((fsr & 0x400) >> 6) | (fsr & 0xF)) == 0x2
-}
+fn fsr_is_debug(fsr: u32) -> bool { (((fsr & 0x400) >> 6) | (fsr & 0xF)) == 0x2 }
 
-fn is_thumb(ctx: &SceExcpmgrExceptionContext) -> bool {
-    (ctx.SPSR >> 5) & 1 != 0
-}
+fn is_thumb(ctx: &SceExcpmgrExceptionContext) -> bool { (ctx.SPSR >> 5) & 1 != 0 }
 
 #[macro_export]
 macro_rules! excp_handler {
@@ -80,25 +73,13 @@ excp_handler!(_gdb_dabt_handler, gdb_dabt_handler);
 excp_handler!(_gdb_undef_handler, gdb_undef_handler);
 
 pub fn register_exception_handlers() {
-    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(
-        SCE_EXCP_PABT,
-        5,
-        _gdb_pabt_handler
-    )) {
+    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_PABT, 5, _gdb_pabt_handler)) {
         println!("{err} excp=SCE_EXCP_PABT");
     }
-    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(
-        SCE_EXCP_DABT,
-        5,
-        _gdb_dabt_handler
-    )) {
+    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_DABT, 5, _gdb_dabt_handler)) {
         println!("{err} excp=SCE_EXCP_DABT");
     }
-    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(
-        SCE_EXCP_UNDEF_INSTRUCTION,
-        5,
-        _gdb_undef_handler
-    )) {
+    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_UNDEF_INSTRUCTION, 5, _gdb_undef_handler)) {
         println!("{err} excp=SCE_EXCP_UNDEF_INSTRUCTION");
     }
 }
@@ -127,37 +108,25 @@ pub extern "C" fn gdb_undef_handler(
     handle_undef(unsafe { &*context }, code)
 }
 
-fn handle_prefetch_abort(
-    context: &SceExcpmgrExceptionContext,
-    code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
+fn handle_prefetch_abort(context: &SceExcpmgrExceptionContext, code: SceExcpHandlingCode) -> SceExcpHandlingCode {
     if fsr_is_debug(context.IFSR) {
         return handle_break(context, code);
     }
     handle_exception(context, ExceptionKind::Pabt, context.IFAR)
 }
 
-fn handle_data_abort(
-    context: &SceExcpmgrExceptionContext,
-    code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
+fn handle_data_abort(context: &SceExcpmgrExceptionContext, code: SceExcpHandlingCode) -> SceExcpHandlingCode {
     if fsr_is_debug(context.DFSR) {
         return handle_watch(context, code);
     }
     handle_exception(context, ExceptionKind::Dabt, context.DFAR)
 }
 
-fn handle_undef(
-    context: &SceExcpmgrExceptionContext,
-    _code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
+fn handle_undef(context: &SceExcpmgrExceptionContext, _code: SceExcpHandlingCode) -> SceExcpHandlingCode {
     handle_exception(context, ExceptionKind::Undef, 0)
 }
 
-fn handle_watch(
-    context: &SceExcpmgrExceptionContext,
-    _code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
+fn handle_watch(context: &SceExcpmgrExceptionContext, _code: SceExcpHandlingCode) -> SceExcpHandlingCode {
     let (pid, tid) = get_thread_context_info();
     let write = dfsr_is_write(context.DFSR);
     exception_report::report_watch(context, pid, tid, write);
@@ -166,17 +135,10 @@ fn handle_watch(
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     };
     if !session.has_watchpoint(context.DFAR) {
-        println!(
-            "handle_watch: no armed watchpoint for DFAR=0x{:x}",
-            context.DFAR
-        );
+        println!("handle_watch: no armed watchpoint for DFAR=0x{:x}", context.DFAR);
         return SCE_EXCPMGR_EXCEPTION_NOT_HANDLED;
     }
-    let kind = if write {
-        WatchKind::Write
-    } else {
-        WatchKind::Read
-    };
+    let kind = if write { WatchKind::Write } else { WatchKind::Read };
 
     halt_for_debug(pid, tid);
     session.push_excp(ExceptionEvent::Watch {
@@ -187,10 +149,7 @@ fn handle_watch(
     SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2
 }
 
-fn handle_break(
-    context: &SceExcpmgrExceptionContext,
-    _code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
+fn handle_break(context: &SceExcpmgrExceptionContext, _code: SceExcpHandlingCode) -> SceExcpHandlingCode {
     let fault_addr = context.address_of_faulting_instruction;
     let (pid, tid) = get_thread_context_info();
     if false {
@@ -224,11 +183,7 @@ fn handle_break(
     SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2
 }
 
-fn handle_exception(
-    context: &SceExcpmgrExceptionContext,
-    kind: ExceptionKind,
-    addr: u32,
-) -> SceExcpHandlingCode {
+fn handle_exception(context: &SceExcpmgrExceptionContext, kind: ExceptionKind, addr: u32) -> SceExcpHandlingCode {
     let (pid, tid) = get_thread_context_info();
     exception_report::report_exception(context, pid, tid, kind, addr);
 
@@ -243,9 +198,7 @@ fn handle_exception(
 
 const DBGP_ERROR_INVALID_ARGUMENT: i32 = 0x8008_0001u32 as i32;
 
-unsafe extern "C" fn handle_process_start(_parent_pid: SceUID, _pid: SceUID, _time: u64) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_process_start(_parent_pid: SceUID, _pid: SceUID, _time: u64) -> i32 { 0 }
 
 unsafe extern "C" fn handle_process_exit(pid: SceUID, _exit_status: i32, _time: u64) -> i32 {
     if let Some(session) = find_session_for_pid(pid) {
@@ -261,42 +214,17 @@ unsafe extern "C" fn handle_process_kill(pid: SceUID, _time: u64) -> i32 {
     0
 }
 
-unsafe extern "C" fn handle_process_spontaneous_exit(
-    _pid: SceUID,
-    _status: u32,
-    _time: u64,
-) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_process_spontaneous_exit(_pid: SceUID, _status: u32, _time: u64) -> i32 { 0 }
 
-unsafe extern "C" fn handle_process_exit_to_spawn(
-    _pid: SceUID,
-    _spawn_pid: SceUID,
-    _time: u64,
-) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_process_exit_to_spawn(_pid: SceUID, _spawn_pid: SceUID, _time: u64) -> i32 { 0 }
 
-unsafe extern "C" fn handle_exit_spawn(
-    _pid: SceUID,
-    _spawn_pid: SceUID,
-    _prev_pid: SceUID,
-    _time: u64,
-) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_exit_spawn(_pid: SceUID, _spawn_pid: SceUID, _prev_pid: SceUID, _time: u64) -> i32 { 0 }
 
-unsafe extern "C" fn handle_process_suspend(_pid: SceUID) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_process_suspend(_pid: SceUID) -> i32 { 0 }
 
-unsafe extern "C" fn handle_process_resume(_pid: SceUID) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_process_resume(_pid: SceUID) -> i32 { 0 }
 
-unsafe extern "C" fn handle_app_abort(_pid: SceUID) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_app_abort(_pid: SceUID) -> i32 { 0 }
 
 unsafe extern "C" fn handle_module_start(pid: SceUID, modid: SceUID, _time: u64) -> i32 {
     if let Some(session) = find_session_for_pid(pid) {
@@ -312,19 +240,11 @@ unsafe extern "C" fn handle_module_stop(pid: SceUID, modid: SceUID, _time: u64) 
     0
 }
 
-unsafe extern "C" fn handle_is_debug_target(pid: SceUID) -> i32 {
-    i32::from(find_session_for_pid(pid).is_some())
-}
+unsafe extern "C" fn handle_is_debug_target(pid: SceUID) -> i32 { i32::from(find_session_for_pid(pid).is_some()) }
 
-unsafe extern "C" fn handle_is_ps_button_captured() -> i32 {
-    0
-}
+unsafe extern "C" fn handle_is_ps_button_captured() -> i32 { 0 }
 
-unsafe extern "C" fn handle_get_original_opcode(
-    pid: SceUID,
-    address: *mut c_void,
-    opcode: *mut u32,
-) -> i32 {
+unsafe extern "C" fn handle_get_original_opcode(pid: SceUID, address: *mut c_void, opcode: *mut u32) -> i32 {
     if opcode.is_null() {
         return DBGP_ERROR_INVALID_ARGUMENT;
     }
@@ -370,17 +290,11 @@ unsafe extern "C" fn handle_suspend_process_and_wait_resume(
     }
 }
 
-unsafe extern "C" fn handle_is_process_attached(pid: SceUID) -> i32 {
-    i32::from(find_session_for_pid(pid).is_some())
-}
+unsafe extern "C" fn handle_is_process_attached(pid: SceUID) -> i32 { i32::from(find_session_for_pid(pid).is_some()) }
 
-unsafe extern "C" fn handle_enable_watchpoint(_ops: *const SysrootDbgpHandler) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_enable_watchpoint(_ops: *const SysrootDbgpHandler) -> i32 { 0 }
 
-unsafe extern "C" fn handle_disable_watchpoint(_ops: *const SysrootDbgpHandler) -> i32 {
-    0
-}
+unsafe extern "C" fn handle_disable_watchpoint(_ops: *const SysrootDbgpHandler) -> i32 { 0 }
 
 unsafe extern "C" fn handle_update_ulobjmgr_for_dbgp(
     _dbgp: *mut c_void,
@@ -434,12 +348,7 @@ pub fn register_process_handlers() -> Result<(), SceError> {
     Ok(())
 }
 
-unsafe extern "C" fn handle_sysevent(
-    resume: i32,
-    eventid: i32,
-    _args: *mut c_void,
-    _opt: *mut c_void,
-) -> i32 {
+unsafe extern "C" fn handle_sysevent(resume: i32, eventid: i32, _args: *mut c_void, _opt: *mut c_void) -> i32 {
     if resume != 0 && eventid == 0x100000 {
         if let Err(err) = enable_debug() {
             println!("enable_debug: {err}");

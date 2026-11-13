@@ -26,8 +26,7 @@ const MAX_SESSIONS: usize = 4;
 pub const EV_WAKE_WORKER: u32 = 1 << 0;
 pub const EV_WAKE_READER: u32 = 1 << 1;
 
-static SESSION_POOL: [Spinlock<Option<GdbSessionInner>>; MAX_SESSIONS] =
-    [const { Spinlock::new(None) }; MAX_SESSIONS];
+static SESSION_POOL: [Spinlock<Option<GdbSessionInner>>; MAX_SESSIONS] = [const { Spinlock::new(None) }; MAX_SESSIONS];
 static SESSION_ALLOC_LOCK: Spinlock<()> = Spinlock::new(());
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -39,21 +38,10 @@ pub enum ExceptionKind {
 
 #[derive(Copy, Clone, Debug)]
 pub enum ExceptionEvent {
-    HwBreak {
-        tid: SceUID,
-    },
-    SwBreak {
-        tid: SceUID,
-    },
-    Watch {
-        tid: SceUID,
-        addr: u32,
-        kind: WatchKind,
-    },
-    Exception {
-        tid: SceUID,
-        kind: ExceptionKind,
-    },
+    HwBreak { tid: SceUID },
+    SwBreak { tid: SceUID },
+    Watch { tid: SceUID, addr: u32, kind: WatchKind },
+    Exception { tid: SceUID, kind: ExceptionKind },
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -164,21 +152,13 @@ impl GdbSessionInner {
         }
     }
 
-    pub fn pid(&self) -> SceUID {
-        self.pid
-    }
+    pub fn pid(&self) -> SceUID { self.pid }
 
-    pub fn pop_excp(&mut self) -> Option<ExceptionEvent> {
-        unsafe { self.exceptions.pop() }
-    }
+    pub fn pop_excp(&mut self) -> Option<ExceptionEvent> { unsafe { self.exceptions.pop() } }
 
-    pub fn pop_module(&mut self) -> Option<ModuleEvent> {
-        unsafe { self.modules.pop() }
-    }
+    pub fn pop_module(&mut self) -> Option<ModuleEvent> { unsafe { self.modules.pop() } }
 
-    pub fn has_excp(&self) -> bool {
-        !self.exceptions.is_empty()
-    }
+    pub fn has_excp(&self) -> bool { !self.exceptions.is_empty() }
 
     pub fn pop_exited(&mut self) -> bool {
         let exited = self.exited;
@@ -186,12 +166,7 @@ impl GdbSessionInner {
         exited
     }
 
-    pub fn set_step(
-        &mut self,
-        tid: SceUID,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> Result<(), SceError> {
+    pub fn set_step(&mut self, tid: SceUID, addr: u32, kind: ArmBreakpointKind) -> Result<(), SceError> {
         self.clear_step_breakpoint()?;
 
         let step = if is_debug_enabled() {
@@ -226,28 +201,17 @@ impl GdbSessionInner {
             .is_some_and(|step| step.tid() == tid && step.addr() == addr)
     }
 
-    pub fn pop_step_finished(&mut self) -> Option<SceUID> {
-        self.step_result.take()
-    }
+    pub fn pop_step_finished(&mut self) -> Option<SceUID> { self.step_result.take() }
 
     pub fn has_watchpoint(&self, addr: u32) -> bool {
-        self.hw_watchpoints
-            .iter()
-            .flatten()
-            .any(|slot| slot.addr == addr)
+        self.hw_watchpoints.iter().flatten().any(|slot| slot.addr == addr)
     }
 
     pub fn get_original_opcode(&self, addr: u32) -> Option<u32> {
-        let bp = self
-            .sw_breakpoints
-            .iter()
-            .flatten()
-            .find(|bp| bp.addr() == addr)?;
+        let bp = self.sw_breakpoints.iter().flatten().find(|bp| bp.addr() == addr)?;
         let (orig, len) = match bp {
             SwBreakpoint::Claimed { .. } => return None,
-            SwBreakpoint::Patched { orig, len, .. } | SwBreakpoint::Shared { orig, len, .. } => {
-                (orig, *len)
-            }
+            SwBreakpoint::Patched { orig, len, .. } | SwBreakpoint::Shared { orig, len, .. } => (orig, *len),
         };
         let src = orig.get(..len)?;
         let mut bytes = [0u8; 4];
@@ -264,8 +228,7 @@ impl GdbSessionInner {
             }
             let (orig, len) = match bp {
                 SwBreakpoint::Claimed { .. } => return false,
-                SwBreakpoint::Patched { orig, len, .. }
-                | SwBreakpoint::Shared { orig, len, .. } => (orig, *len),
+                SwBreakpoint::Patched { orig, len, .. } | SwBreakpoint::Shared { orig, len, .. } => (orig, *len),
             };
             let (Some(src), Some(dst)) = (insn.get(..len), orig.get_mut(..len)) else {
                 return false;
@@ -276,12 +239,7 @@ impl GdbSessionInner {
         false
     }
 
-    pub fn set_hw_watchpoint(
-        &mut self,
-        addr: u32,
-        _len: u32,
-        kind: WatchKind,
-    ) -> Result<bool, SceError> {
+    pub fn set_hw_watchpoint(&mut self, addr: u32, _len: u32, kind: WatchKind) -> Result<bool, SceError> {
         if !is_debug_enabled() {
             return Ok(false);
         }
@@ -326,11 +284,7 @@ impl GdbSessionInner {
         Ok(false)
     }
 
-    pub fn set_hw_breakpoint(
-        &mut self,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> Result<bool, SceError> {
+    pub fn set_hw_breakpoint(&mut self, addr: u32, kind: ArmBreakpointKind) -> Result<bool, SceError> {
         if !is_debug_enabled() {
             return Ok(false);
         }
@@ -398,12 +352,7 @@ impl GdbSessionInner {
     }
 
     fn claim_sw_slot(&mut self, addr: u32) -> Option<usize> {
-        if self
-            .sw_breakpoints
-            .iter()
-            .flatten()
-            .any(|bp| bp.addr() == addr)
-        {
+        if self.sw_breakpoints.iter().flatten().any(|bp| bp.addr() == addr) {
             return None;
         }
         if let Some(idx) = self.sw_breakpoints.iter().position(Option::is_none) {
@@ -414,11 +363,7 @@ impl GdbSessionInner {
         None
     }
 
-    fn install_sw_breakpoint(
-        pid: SceUID,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> Result<SwBreakpoint, SceError> {
+    fn install_sw_breakpoint(pid: SceUID, addr: u32, kind: ArmBreakpointKind) -> Result<SwBreakpoint, SceError> {
         let patch = bkpt_insn(&kind);
         let len = match kind {
             ArmBreakpointKind::Arm32 | ArmBreakpointKind::Thumb32 => 4,
@@ -430,18 +375,10 @@ impl GdbSessionInner {
 
         if is_shared_address(addr) {
             if !stai_is_loaded() {
-                return Err(SceError::new(
-                    -1,
-                    "cant break in shared modules without stai",
-                ));
+                return Err(SceError::new(-1, "cant break in shared modules without stai"));
             }
             let uid = sce_call!(staiCowWrite(pid, addr, patch.as_ptr() as _, patch.len()))?;
-            return Ok(SwBreakpoint::Shared {
-                addr,
-                uid,
-                orig,
-                len,
-            });
+            return Ok(SwBreakpoint::Shared { addr, uid, orig, len });
         }
 
         write_user_text(pid, addr, patch)?;
@@ -494,13 +431,9 @@ pub struct SessionRef {
 }
 
 impl SessionRef {
-    fn lock(&self) -> SpinlockGuard<'static, Option<GdbSessionInner>> {
-        self.slot.lock()
-    }
+    fn lock(&self) -> SpinlockGuard<'static, Option<GdbSessionInner>> { self.slot.lock() }
 
-    pub fn pid(&self) -> SceUID {
-        self.lock().as_ref().map_or(-1, GdbSessionInner::pid)
-    }
+    pub fn pid(&self) -> SceUID { self.lock().as_ref().map_or(-1, GdbSessionInner::pid) }
 
     pub fn push_excp(&self, event: ExceptionEvent) {
         let (evflag, overflow) = {
@@ -517,9 +450,7 @@ impl SessionRef {
         let _ = evflag.set(EV_WAKE_WORKER);
     }
 
-    pub fn pop_excp(&self) -> Option<ExceptionEvent> {
-        self.lock().as_mut().and_then(GdbSessionInner::pop_excp)
-    }
+    pub fn pop_excp(&self) -> Option<ExceptionEvent> { self.lock().as_mut().and_then(GdbSessionInner::pop_excp) }
 
     pub fn push_module(&self, event: ModuleEvent) {
         let (evflag, overflow) = {
@@ -536,13 +467,9 @@ impl SessionRef {
         let _ = evflag.set(EV_WAKE_WORKER);
     }
 
-    pub fn pop_module(&self) -> Option<ModuleEvent> {
-        self.lock().as_mut().and_then(GdbSessionInner::pop_module)
-    }
+    pub fn pop_module(&self) -> Option<ModuleEvent> { self.lock().as_mut().and_then(GdbSessionInner::pop_module) }
 
-    pub fn has_excp(&self) -> bool {
-        self.lock().as_ref().is_some_and(GdbSessionInner::has_excp)
-    }
+    pub fn has_excp(&self) -> bool { self.lock().as_ref().is_some_and(GdbSessionInner::has_excp) }
 
     pub fn push_exited(&self) {
         let evflag = {
@@ -557,22 +484,14 @@ impl SessionRef {
         let _ = evflag.set(EV_WAKE_WORKER);
     }
 
-    pub fn pop_exited(&self) -> bool {
-        self.lock()
-            .as_mut()
-            .is_some_and(GdbSessionInner::pop_exited)
-    }
+    pub fn pop_exited(&self) -> bool { self.lock().as_mut().is_some_and(GdbSessionInner::pop_exited) }
 
     pub fn has_watchpoint(&self, addr: u32) -> bool {
-        self.lock()
-            .as_ref()
-            .is_some_and(|inner| inner.has_watchpoint(addr))
+        self.lock().as_ref().is_some_and(|inner| inner.has_watchpoint(addr))
     }
 
     pub fn get_original_opcode(&self, addr: u32) -> Option<u32> {
-        self.lock()
-            .as_ref()
-            .and_then(|inner| inner.get_original_opcode(addr))
+        self.lock().as_ref().and_then(|inner| inner.get_original_opcode(addr))
     }
 
     pub fn set_original_opcode(&self, addr: u32, insn: u32) -> bool {
@@ -582,9 +501,7 @@ impl SessionRef {
     }
 
     pub fn is_step(&self, tid: SceUID, addr: u32) -> bool {
-        self.lock()
-            .as_ref()
-            .is_some_and(|inner| inner.is_step(tid, addr))
+        self.lock().as_ref().is_some_and(|inner| inner.is_step(tid, addr))
     }
 
     pub fn step_finished(&self) {
@@ -606,17 +523,10 @@ impl SessionRef {
     }
 
     pub fn pop_step_finished(&self) -> Option<SceUID> {
-        self.lock()
-            .as_mut()
-            .and_then(GdbSessionInner::pop_step_finished)
+        self.lock().as_mut().and_then(GdbSessionInner::pop_step_finished)
     }
 
-    pub fn set_hw_watchpoint(
-        &self,
-        addr: u32,
-        len: u32,
-        kind: WatchKind,
-    ) -> Result<bool, SceError> {
+    pub fn set_hw_watchpoint(&self, addr: u32, len: u32, kind: WatchKind) -> Result<bool, SceError> {
         println!("set_hw_watchpoint addr={addr:x}");
         match self.lock().as_mut() {
             Some(inner) => inner.set_hw_watchpoint(addr, len, kind),
@@ -673,12 +583,7 @@ impl SessionRef {
         }
     }
 
-    pub fn set_step(
-        &self,
-        tid: SceUID,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> Result<(), SceError> {
+    pub fn set_step(&self, tid: SceUID, addr: u32, kind: ArmBreakpointKind) -> Result<(), SceError> {
         match self.lock().as_mut() {
             Some(inner) => inner.set_step(tid, addr, kind),
             None => Err(SceError::new(-1, "no session")),
@@ -754,16 +659,9 @@ impl GdbSession {
         })
     }
 
-    pub fn inner(&self) -> SessionRef {
-        self.inner
-    }
+    pub fn inner(&self) -> SessionRef { self.inner }
 
-    pub fn set_hw_watchpoint(
-        &self,
-        addr: u32,
-        len: u32,
-        kind: WatchKind,
-    ) -> Result<bool, SceError> {
+    pub fn set_hw_watchpoint(&self, addr: u32, len: u32, kind: WatchKind) -> Result<bool, SceError> {
         if !is_debug_enabled() {
             return Ok(false);
         }
@@ -791,12 +689,7 @@ impl GdbSession {
         self.inner().clear_hw_breakpoint(addr)
     }
 
-    pub fn set_step(
-        &self,
-        tid: SceUID,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> Result<(), SceError> {
+    pub fn set_step(&self, tid: SceUID, addr: u32, kind: ArmBreakpointKind) -> Result<(), SceError> {
         self.inner.set_step(tid, addr, kind)
     }
 

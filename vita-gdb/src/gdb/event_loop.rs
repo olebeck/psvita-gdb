@@ -183,9 +183,7 @@ fn next_event_or_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Inc
         };
 
         // wait for any event
-        target
-            .evflag
-            .wait(EV_WAKE_WORKER, SCE_EVENT_WAITCLEAR_PAT)?;
+        target.evflag.wait(EV_WAKE_WORKER, SCE_EVENT_WAITCLEAR_PAT)?;
     }
 }
 
@@ -207,8 +205,6 @@ fn next_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Incoming, Sc
         };
 
         // wait for any event
-        target
-            .evflag
-            .wait(EV_WAKE_WORKER, SCE_EVENT_WAITCLEAR_PAT)?;
+        target.evflag.wait(EV_WAKE_WORKER, SCE_EVENT_WAITCLEAR_PAT)?;
     }
 }

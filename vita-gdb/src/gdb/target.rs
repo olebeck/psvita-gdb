@@ -11,13 +11,12 @@ use gdbstub::{
         ext::{
             base::BaseOps,
             breakpoints::{
-                Breakpoints, BreakpointsOps, HwBreakpoint, HwBreakpointOps, HwWatchpoint,
-                HwWatchpointOps, SwBreakpoint, SwBreakpointOps, WatchKind,
+                Breakpoints, BreakpointsOps, HwBreakpoint, HwBreakpointOps, HwWatchpoint, HwWatchpointOps,
+                SwBreakpoint, SwBreakpointOps, WatchKind,
             },
             exec_file::{ExecFile, ExecFileOps},
             extended_mode::{
-                Args, AttachKind, CurrentActivePid, CurrentActivePidOps, ExtendedMode,
-                ExtendedModeOps, ShouldTerminate,
+                Args, AttachKind, CurrentActivePid, CurrentActivePidOps, ExtendedMode, ExtendedModeOps, ShouldTerminate,
             },
             libraries::{Libraries, LibrariesOps},
             monitor_cmd::MonitorCmdOps,
@@ -39,9 +38,9 @@ use crate::{
         ffi::ksceKernelGetModuleIdByPid,
         thread::delay_thread,
         utils::{
-            ArgvWriter, SceError, StreamWriter, get_module_fingerprint, get_module_ids,
-            get_module_info, get_process_ids, get_process_status, get_thread_ids, get_thread_info,
-            halt_process, name_to_str, resume_process, str_to_buf,
+            ArgvWriter, SceError, StreamWriter, get_module_fingerprint, get_module_ids, get_module_info,
+            get_process_ids, get_process_status, get_thread_ids, get_thread_info, halt_process, name_to_str,
+            resume_process, str_to_buf,
         },
     },
     println, sce_call,
@@ -91,9 +90,7 @@ impl VitaTarget {
         }
     }
 
-    pub fn pid(&self) -> Option<SceUID> {
-        self.session.as_ref().map(|s| s.inner().pid())
-    }
+    pub fn pid(&self) -> Option<SceUID> { self.session.as_ref().map(|s| s.inner().pid()) }
 
     fn attach(&mut self, pid: SceUID) -> bool {
         if self.session.is_some() {
@@ -118,9 +115,7 @@ impl VitaTarget {
 }
 
 impl Drop for VitaTarget {
-    fn drop(&mut self) {
-        self.detach();
-    }
+    fn drop(&mut self) { self.detach(); }
 }
 
 impl Target for VitaTarget {
@@ -129,49 +124,31 @@ impl Target for VitaTarget {
     type Tid = Tid;
 
     #[inline(always)]
-    fn base_ops(&mut self) -> BaseOps<'_, Self::Arch, Self::Error, Self::Tid> {
-        BaseOps::MultiThread(self)
-    }
+    fn base_ops(&mut self) -> BaseOps<'_, Self::Arch, Self::Error, Self::Tid> { BaseOps::MultiThread(self) }
 
     #[inline(always)]
-    fn support_breakpoints(&mut self) -> Option<BreakpointsOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_breakpoints(&mut self) -> Option<BreakpointsOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_monitor_cmd(&mut self) -> Option<MonitorCmdOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_monitor_cmd(&mut self) -> Option<MonitorCmdOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_extended_mode(&mut self) -> Option<ExtendedModeOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_extended_mode(&mut self) -> Option<ExtendedModeOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_libraries(&mut self) -> Option<LibrariesOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_libraries(&mut self) -> Option<LibrariesOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_process_info(&mut self) -> Option<ProcessInfoOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_process_info(&mut self) -> Option<ProcessInfoOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_exec_file(&mut self) -> Option<ExecFileOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_exec_file(&mut self) -> Option<ExecFileOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_section_offsets(&mut self) -> Option<SectionOffsetsOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_section_offsets(&mut self) -> Option<SectionOffsetsOps<'_, Self>> { Some(self) }
 
     #[inline(always)]
-    fn support_threads(&mut self) -> Option<ThreadsOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_threads(&mut self) -> Option<ThreadsOps<'_, Self>> { Some(self) }
 }
 
 impl ExtendedMode for VitaTarget {
@@ -204,9 +181,7 @@ impl ExtendedMode for VitaTarget {
         Ok(ShouldTerminate::No)
     }
 
-    fn restart(&mut self) -> Result<(), Self::Error> {
-        Err(SceError::new(-1, "ExtendedMode::restart"))
-    }
+    fn restart(&mut self) -> Result<(), Self::Error> { Err(SceError::new(-1, "ExtendedMode::restart")) }
 
     fn query_if_attached(&mut self, pid: Pid) -> TargetResult<AttachKind, Self> {
         let Some(cur_pid) = self.pid() else {
@@ -298,9 +273,7 @@ impl ExtendedMode for VitaTarget {
     }
 
     #[inline(always)]
-    fn support_current_active_pid(&mut self) -> Option<CurrentActivePidOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_current_active_pid(&mut self) -> Option<CurrentActivePidOps<'_, Self>> { Some(self) }
 }
 
 impl CurrentActivePid for VitaTarget {
@@ -313,12 +286,7 @@ impl CurrentActivePid for VitaTarget {
 }
 
 impl Libraries for VitaTarget {
-    fn get_libraries(
-        &self,
-        offset: u64,
-        _length: usize,
-        buf: &mut [u8],
-    ) -> TargetResult<usize, Self> {
+    fn get_libraries(&self, offset: u64, _length: usize, buf: &mut [u8]) -> TargetResult<usize, Self> {
         let Some(pid) = self.pid() else {
             return Ok(0);
         };
@@ -367,12 +335,7 @@ impl Libraries for VitaTarget {
 }
 
 impl Threads for VitaTarget {
-    fn get_threads(
-        &self,
-        offset: u64,
-        _length: usize,
-        buf: &mut [u8],
-    ) -> TargetResult<usize, Self> {
+    fn get_threads(&self, offset: u64, _length: usize, buf: &mut [u8]) -> TargetResult<usize, Self> {
         let Some(pid) = self.pid() else {
             return Ok(0);
         };
@@ -417,17 +380,13 @@ impl Threads for VitaTarget {
 fn format_tid(tid: usize) -> impl Display {
     struct TidDisplay(usize);
     impl Display for TidDisplay {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "{:08x}", self.0)
-        }
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { write!(f, "{:08x}", self.0) }
     }
     TidDisplay(tid)
 }
 
 impl SectionOffsets for VitaTarget {
-    fn get_section_offsets(
-        &mut self,
-    ) -> Result<Offsets<<Self::Arch as gdbstub::arch::Arch>::Usize>, Self::Error> {
+    fn get_section_offsets(&mut self) -> Result<Offsets<<Self::Arch as gdbstub::arch::Arch>::Usize>, Self::Error> {
         let Some(pid) = self.pid() else {
             return Err(SceError::new(-1, "no pid"));
         };
@@ -455,10 +414,7 @@ impl SectionOffsets for VitaTarget {
 
 impl ProcessInfo for VitaTarget {
     #[inline(always)]
-    fn process_info(
-        &self,
-        write_item: &mut dyn FnMut(&ProcessInfoResponse<'_>),
-    ) -> Result<(), Self::Error> {
+    fn process_info(&self, write_item: &mut dyn FnMut(&ProcessInfoResponse<'_>)) -> Result<(), Self::Error> {
         for pid in get_process_ids()? {
             let pid = unsafe { Pid::new_unchecked(pid as _) };
             write_item(&ProcessInfoResponse::Pid(pid));
@@ -478,9 +434,7 @@ impl ExecFile for VitaTarget {
         let Some(pid) = pid.map(|pid| pid.get() as i32).or(self.pid()) else {
             return Err(TargetError::NonFatal);
         };
-        let info = match sce_call!(ksceKernelGetModuleIdByPid(pid))
-            .and_then(|modid| get_module_info(pid, modid))
-        {
+        let info = match sce_call!(ksceKernelGetModuleIdByPid(pid)).and_then(|modid| get_module_info(pid, modid)) {
             Ok(info) => info,
             Err(err) => {
                 println!("get_exec_file {err}");
@@ -506,28 +460,18 @@ impl Breakpoints for VitaTarget {
     }
 
     #[inline(always)]
-    fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<'_, Self>> {
-        Some(self)
-    }
+    fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<'_, Self>> { Some(self) }
 }
 
 impl SwBreakpoint for VitaTarget {
-    fn add_sw_breakpoint(
-        &mut self,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> TargetResult<bool, Self> {
+    fn add_sw_breakpoint(&mut self, addr: u32, kind: ArmBreakpointKind) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
         Ok(session.inner().set_sw_breakpoint(addr, kind))
     }
 
-    fn remove_sw_breakpoint(
-        &mut self,
-        addr: u32,
-        _kind: ArmBreakpointKind,
-    ) -> TargetResult<bool, Self> {
+    fn remove_sw_breakpoint(&mut self, addr: u32, _kind: ArmBreakpointKind) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
@@ -536,11 +480,7 @@ impl SwBreakpoint for VitaTarget {
 }
 
 impl HwBreakpoint for VitaTarget {
-    fn add_hw_breakpoint(
-        &mut self,
-        addr: u32,
-        kind: ArmBreakpointKind,
-    ) -> TargetResult<bool, Self> {
+    fn add_hw_breakpoint(&mut self, addr: u32, kind: ArmBreakpointKind) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
@@ -553,11 +493,7 @@ impl HwBreakpoint for VitaTarget {
         }
     }
 
-    fn remove_hw_breakpoint(
-        &mut self,
-        addr: u32,
-        _kind: ArmBreakpointKind,
-    ) -> TargetResult<bool, Self> {
+    fn remove_hw_breakpoint(&mut self, addr: u32, _kind: ArmBreakpointKind) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
@@ -572,12 +508,7 @@ impl HwBreakpoint for VitaTarget {
 }
 
 impl HwWatchpoint for VitaTarget {
-    fn add_hw_watchpoint(
-        &mut self,
-        addr: u32,
-        len: u32,
-        kind: WatchKind,
-    ) -> TargetResult<bool, Self> {
+    fn add_hw_watchpoint(&mut self, addr: u32, len: u32, kind: WatchKind) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };
@@ -590,12 +521,7 @@ impl HwWatchpoint for VitaTarget {
         }
     }
 
-    fn remove_hw_watchpoint(
-        &mut self,
-        addr: u32,
-        _len: u32,
-        _kind: WatchKind,
-    ) -> TargetResult<bool, Self> {
+    fn remove_hw_watchpoint(&mut self, addr: u32, _len: u32, _kind: WatchKind) -> TargetResult<bool, Self> {
         let Some(session) = self.session.as_ref() else {
             return Ok(false);
         };

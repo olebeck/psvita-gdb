@@ -12,9 +12,7 @@ pub struct Ref(UnsafeCell<*const TaiHookUser>);
 unsafe impl Sync for Ref {}
 
 impl Ref {
-    pub const fn new() -> Ref {
-        Ref(UnsafeCell::new(core::ptr::null()))
-    }
+    pub const fn new() -> Ref { Ref(UnsafeCell::new(core::ptr::null())) }
 
     pub fn next(&self) -> Option<Ref> {
         let ptr = unsafe { *self.0.get() };

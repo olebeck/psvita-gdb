@@ -2,9 +2,9 @@ use core::ffi::{CStr, c_void};
 use core::ptr::null_mut;
 
 use vitasdk_sys::{
-    SCE_KERNEL_BACKTRACE_MODE_KERNEL, SCE_KERNEL_BACKTRACE_MODE_USER, SceExcpmgrExceptionContext,
-    SceKernelCallFrame, SceKernelThreadInfo, SceUID, ksceGUIDName, ksceKernelBacktrace,
-    ksceKernelFindProcMemBlockByAddr, ksceKernelGetMemBlockBase, kscePUIDtoGUID,
+    SCE_KERNEL_BACKTRACE_MODE_KERNEL, SCE_KERNEL_BACKTRACE_MODE_USER, SceExcpmgrExceptionContext, SceKernelCallFrame,
+    SceKernelThreadInfo, SceUID, ksceGUIDName, ksceKernelBacktrace, ksceKernelFindProcMemBlockByAddr,
+    ksceKernelGetMemBlockBase, kscePUIDtoGUID,
 };
 
 use crate::gdb::sessions::ExceptionKind;
@@ -47,26 +47,17 @@ pub fn report_watch(context: &SceExcpmgrExceptionContext, pid: SceUID, tid: SceU
     report(title, context, pid, tid, Some(context.DFAR));
 }
 
-fn report(
-    title: &str,
-    context: &SceExcpmgrExceptionContext,
-    pid: SceUID,
-    tid: SceUID,
-    fault_addr: Option<u32>,
-) {
+fn report(title: &str, context: &SceExcpmgrExceptionContext, pid: SceUID, tid: SceUID, fault_addr: Option<u32>) {
     println!("\n{title} pid={pid} tid={tid}");
 
     let thread = get_thread_info(tid).ok();
-    let stack = thread
-        .as_ref()
-        .and_then(|info| stack_info(info, context.sp));
+    let stack = thread.as_ref().and_then(|info| stack_info(info, context.sp));
     if let Some(info) = &thread {
         let name = name_to_str(&info.name).unwrap_or("<invalid>");
         match &stack {
-            Some(stack) => println!(
-                "  thread={name} stack=0x{:08x}..0x{:08x}",
-                stack.start, stack.end
-            ),
+            Some(stack) => {
+                println!("  thread={name} stack=0x{:08x}..0x{:08x}", stack.start, stack.end)
+            }
             None => println!("  thread={name}"),
         }
     }
@@ -81,11 +72,7 @@ fn report(
         "  spsr  0x{:08x}  mode={} thumb={}",
         context.SPSR,
         mode.to_str(),
-        if context.SPSR & (1 << 5) != 0 {
-            "yes"
-        } else {
-            "no"
-        }
+        if context.SPSR & (1 << 5) != 0 { "yes" } else { "no" }
     );
     println!(
         "  ifsr  0x{:08x}  ifar=0x{:08x}  dfsr=0x{:08x}{}  dfar=0x{:08x}",
@@ -225,10 +212,7 @@ fn print_word(prefix: usize, label: &str, value: u32, pid: SceUID, stack: Option
 }
 
 fn print_module(pid: SceUID, addr: u32) -> bool {
-    let Ok(mod_puid) = sce_call!(ksceKernelGetModuleIdByAddrForDebugger(
-        pid,
-        addr as *const c_void
-    )) else {
+    let Ok(mod_puid) = sce_call!(ksceKernelGetModuleIdByAddrForDebugger(pid, addr as *const c_void)) else {
         return false;
     };
     let Ok(modid) = sce_call!(kscePUIDtoGUID(pid, mod_puid)) else {
@@ -256,11 +240,7 @@ fn print_module(pid: SceUID, addr: u32) -> bool {
 }
 
 fn print_block(pid: SceUID, addr: u32) -> bool {
-    let Ok(uid) = sce_call!(ksceKernelFindProcMemBlockByAddr(
-        pid,
-        addr as *const c_void,
-        0
-    )) else {
+    let Ok(uid) = sce_call!(ksceKernelFindProcMemBlockByAddr(pid, addr as *const c_void, 0)) else {
         return false;
     };
 
@@ -287,9 +267,7 @@ fn print_block(pid: SceUID, addr: u32) -> bool {
     true
 }
 
-fn dfsr_is_write(dfsr: u32) -> bool {
-    dfsr & (1 << 11) != 0
-}
+fn dfsr_is_write(dfsr: u32) -> bool { dfsr & (1 << 11) != 0 }
 
 #[derive(PartialEq, Clone, Copy)]
 enum Mode {
