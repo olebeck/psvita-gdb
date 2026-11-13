@@ -148,6 +148,50 @@ pub fn init_stubs() {
     }
 }
 
+#[repr(C)]
+#[allow(non_snake_case)]
+pub struct SysrootDbgpHandler {
+    pub size: u32,
+    pub processStart: Option<unsafe extern "C" fn(ppid: SceUID, pid: SceUID, time: u64) -> i32>,
+    pub processExit: Option<unsafe extern "C" fn(pid: SceUID, exitStatus: i32, time: u64) -> i32>,
+    pub processKill: Option<unsafe extern "C" fn(pid: SceUID, time: u64) -> i32>,
+    pub processSpontaneousExit:
+        Option<unsafe extern "C" fn(pid: SceUID, status: u32, time: u64) -> i32>,
+    pub processExitToSpawn:
+        Option<unsafe extern "C" fn(pid: SceUID, spawnPid: SceUID, time: u64) -> i32>,
+    pub exitSpawn: Option<
+        unsafe extern "C" fn(pid: SceUID, spawnPid: SceUID, prevPid: SceUID, time: u64) -> i32,
+    >,
+    pub processSuspend: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
+    pub processResume: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
+    pub appAbort: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
+    pub moduleStart: Option<unsafe extern "C" fn(pid: SceUID, modid: SceUID, time: u64) -> i32>,
+    pub moduleStop: Option<unsafe extern "C" fn(pid: SceUID, modid: SceUID, time: u64) -> i32>,
+    pub isDebugTarget: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
+    pub isPsButtonCaptured: Option<unsafe extern "C" fn() -> i32>,
+    pub swBkptGetOriginalOpcode:
+        Option<unsafe extern "C" fn(pid: SceUID, address: *mut c_void, opcode: *mut u32) -> i32>,
+    pub codeModified:
+        Option<unsafe extern "C" fn(pid: SceUID, address: u32, instruction: u32) -> i32>,
+    pub getPrxDebugFlag: Option<unsafe extern "C" fn(pid: SceUID, flag: *mut u32) -> i32>,
+    pub suspendProcessAndWaitResume:
+        Option<unsafe extern "C" fn(pid: SceUID, modid: SceUID, stopReason: u32, time: u64) -> i32>,
+    pub isProcessAttached: Option<unsafe extern "C" fn(pid: SceUID) -> i32>,
+    pub enableWatchpoint: Option<unsafe extern "C" fn(ops: *const SysrootDbgpHandler) -> i32>,
+    pub disableWatchpoint: Option<unsafe extern "C" fn(ops: *const SysrootDbgpHandler) -> i32>,
+    pub updateUlobjmgrFlagForDbgp: Option<
+        unsafe extern "C" fn(
+            dbgp: *mut c_void,
+            process: *mut c_void,
+            set: u32,
+            clear: u32,
+            flag: *mut u32,
+        ) -> i32,
+    >,
+    pub updateUlobjmgrFlagForLibfiber:
+        Option<unsafe extern "C" fn(pid: SceUID, flag: *mut u32) -> i32>,
+}
+
 libstub_ver!(SceSysmemForKernel, 0x63A519E5, 0x02451F0F,
     //(0x30931572, 0x2995558D, ksceKernelCopyToUserProcTextDomain(pid: SceUID, dst: *mut c_void, src: *const c_void, len: usize) -> i32),
     (0x67BAD5B4, 0x5EF1DAAF, ksceKernelCopyToUserTextDomain(dst: *mut c_void, src: *const c_void, len: usize) -> i32),
@@ -156,7 +200,8 @@ libstub_ver!(SceSysmemForKernel, 0x63A519E5, 0x02451F0F,
 );
 
 libstub!(SceSysrootForKernel, 0x3691DA45,
-    (0xEC3124A3, ksceKernelSysrootGetProcessTitleId(pid: SceUID, titleid: *mut i8, len: u32) -> i32)
+    (0xEC3124A3, ksceKernelSysrootGetProcessTitleId(pid: SceUID, titleid: *mut i8, len: u32) -> i32),
+    (0x3999F917, ksceKernelSysrootRegisterDbgpHandler(ops: *const SysrootDbgpHandler) -> i32),
 );
 
 libstub_ver!(SceProcessmgrForKernel, 0x7A69DE86, 0xEB1F8EF7,

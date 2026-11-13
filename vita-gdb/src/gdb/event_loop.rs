@@ -2,7 +2,7 @@ use gdbstub::common::{Signal, Tid};
 use gdbstub::stub::{DisconnectReason, GdbStub, GdbStubError, state_machine::GdbStubStateMachine};
 use vitasdk_sys::SCE_EVENT_WAITCLEAR_PAT;
 
-use crate::gdb::sessions::ExceptionEvent;
+use crate::gdb::sessions::{ExceptionEvent, ModuleEvent};
 use crate::gdb::tcpconn::{ReadResult, TcpConn};
 use crate::{
     gdb::{
@@ -49,18 +49,16 @@ pub fn run_session(
                     let Some(pid) = target.pid() else {
                         break Ok(DisconnectReason::Disconnect);
                     };
-                    match halt_process(pid) {
+                    let tid = match halt_process(pid) {
                         Err(err) => {
                             println!("halt_process: {err}");
                             break Ok(DisconnectReason::Disconnect);
                         }
-                        Ok(tid) => {
-                            let tid = unsafe { Tid::new_unchecked(tid as _) };
-                            gdb.report_stop(target)
-                                .signal_with_thread(Signal::SIGINT, tid)?
-                                .done()?
-                        }
-                    }
+                        Ok(tid) => unsafe { Tid::new_unchecked(tid as _) },
+                    };
+                    gdb.report_stop(target)
+                        .signal_with_thread(Signal::SIGINT, tid)?
+                        .done()?
                 } else {
                     let ev = match next_event_or_byte(target, gdb.borrow_conn()) {
                         Ok(ev) => ev,
@@ -107,6 +105,20 @@ pub fn run_session(
                             println!("eventloop: connection closed");
                             break Ok(DisconnectReason::Disconnect);
                         }
+
+                        Incoming::ModuleStart | Incoming::ModuleStop => {
+                            let Some(pid) = target.pid() else {
+                                break Ok(DisconnectReason::Disconnect);
+                            };
+                            let tid = match halt_process(pid) {
+                                Err(err) => {
+                                    println!("halt_process: {err}");
+                                    break Ok(DisconnectReason::Disconnect);
+                                }
+                                Ok(tid) => unsafe { Tid::new_unchecked(tid as _) },
+                            };
+                            gdb.report_stop(target).library(tid)?.done()?
+                        }
                     }
                 }
             }
@@ -131,6 +143,8 @@ enum Incoming {
     StepDone,
     Exited(u8),
     Closed,
+    ModuleStart,
+    ModuleStop,
 }
 
 fn next_event_or_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Incoming, SceError> {
@@ -146,6 +160,17 @@ fn next_event_or_byte(target: &mut VitaTarget, conn: &mut TcpConn) -> Result<Inc
             }
             if let Some(ev) = inner.pop_excp() {
                 return Ok(Incoming::Exception(ev));
+            }
+            match inner.pop_module() {
+                Some(ModuleEvent::Start { modid }) => {
+                    println!("module start: modid={modid}");
+                    return Ok(Incoming::ModuleStart);
+                }
+                Some(ModuleEvent::Stop { modid }) => {
+                    println!("module stop: modid={modid}");
+                    return Ok(Incoming::ModuleStop);
+                }
+                None => (),
             }
         };
 

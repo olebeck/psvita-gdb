@@ -56,6 +56,12 @@ pub enum ExceptionEvent {
     },
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum ModuleEvent {
+    Start { modid: SceUID },
+    Stop { modid: SceUID },
+}
+
 #[derive(Clone)]
 pub struct HwWatchpoint {
     addr: u32,
@@ -80,6 +86,8 @@ pub enum SwBreakpoint {
     Shared {
         addr: u32,
         uid: SceUID,
+        orig: [u8; 4],
+        len: usize,
     },
 }
 impl SwBreakpoint {
@@ -122,6 +130,7 @@ pub struct GdbSessionInner {
     step_result: Option<SceUID>,
     exited: bool,
     exceptions: MpscRing<ExceptionEvent, 8>,
+    modules: MpscRing<ModuleEvent, 8>,
 }
 
 impl GdbSessionInner {
@@ -137,6 +146,7 @@ impl GdbSessionInner {
             step_result: None,
             exited: false,
             exceptions: MpscRing::new(),
+            modules: MpscRing::new(),
         }
     }
 
@@ -150,6 +160,7 @@ impl GdbSessionInner {
         self.exited = false;
         unsafe {
             self.exceptions.clear();
+            self.modules.clear();
         }
     }
 
@@ -159,6 +170,10 @@ impl GdbSessionInner {
 
     pub fn pop_excp(&mut self) -> Option<ExceptionEvent> {
         unsafe { self.exceptions.pop() }
+    }
+
+    pub fn pop_module(&mut self) -> Option<ModuleEvent> {
+        unsafe { self.modules.pop() }
     }
 
     pub fn has_excp(&self) -> bool {
@@ -220,6 +235,45 @@ impl GdbSessionInner {
             .iter()
             .flatten()
             .any(|slot| slot.addr == addr)
+    }
+
+    pub fn get_original_opcode(&self, addr: u32) -> Option<u32> {
+        let bp = self
+            .sw_breakpoints
+            .iter()
+            .flatten()
+            .find(|bp| bp.addr() == addr)?;
+        let (orig, len) = match bp {
+            SwBreakpoint::Claimed { .. } => return None,
+            SwBreakpoint::Patched { orig, len, .. } | SwBreakpoint::Shared { orig, len, .. } => {
+                (orig, *len)
+            }
+        };
+        let src = orig.get(..len)?;
+        let mut bytes = [0u8; 4];
+        let dst = bytes.get_mut(..len)?;
+        dst.copy_from_slice(src);
+        Some(u32::from_le_bytes(bytes))
+    }
+
+    pub fn set_original_opcode(&mut self, addr: u32, insn: u32) -> bool {
+        let insn = insn.to_le_bytes();
+        for bp in self.sw_breakpoints.iter_mut().flatten() {
+            if bp.addr() != addr {
+                continue;
+            }
+            let (orig, len) = match bp {
+                SwBreakpoint::Claimed { .. } => return false,
+                SwBreakpoint::Patched { orig, len, .. }
+                | SwBreakpoint::Shared { orig, len, .. } => (orig, *len),
+            };
+            let (Some(src), Some(dst)) = (insn.get(..len), orig.get_mut(..len)) else {
+                return false;
+            };
+            dst.copy_from_slice(src);
+            return true;
+        }
+        false
     }
 
     pub fn set_hw_watchpoint(
@@ -366,6 +420,13 @@ impl GdbSessionInner {
         kind: ArmBreakpointKind,
     ) -> Result<SwBreakpoint, SceError> {
         let patch = bkpt_insn(&kind);
+        let len = match kind {
+            ArmBreakpointKind::Arm32 | ArmBreakpointKind::Thumb32 => 4,
+            ArmBreakpointKind::Thumb16 => 2,
+        };
+        let mut orig = [0u8; 4];
+        let buf = orig.get_mut(..len).ok_or(SceError::new(-1, "invalid"))?;
+        read_user_process(pid, addr, buf)?;
 
         if is_shared_address(addr) {
             if !stai_is_loaded() {
@@ -375,16 +436,14 @@ impl GdbSessionInner {
                 ));
             }
             let uid = sce_call!(staiCowWrite(pid, addr, patch.as_ptr() as _, patch.len()))?;
-            return Ok(SwBreakpoint::Shared { addr, uid });
+            return Ok(SwBreakpoint::Shared {
+                addr,
+                uid,
+                orig,
+                len,
+            });
         }
 
-        let len = match kind {
-            ArmBreakpointKind::Arm32 | ArmBreakpointKind::Thumb32 => 4,
-            ArmBreakpointKind::Thumb16 => 2,
-        };
-        let mut orig = [0u8; 4];
-        let buf = orig.get_mut(..len).ok_or(SceError::new(-1, "invalid"))?;
-        read_user_process(pid, addr, buf)?;
         write_user_text(pid, addr, patch)?;
         Ok(SwBreakpoint::Patched { addr, orig, len })
     }
@@ -462,6 +521,25 @@ impl SessionRef {
         self.lock().as_mut().and_then(GdbSessionInner::pop_excp)
     }
 
+    pub fn push_module(&self, event: ModuleEvent) {
+        let (evflag, overflow) = {
+            let mut slot = self.lock();
+            let Some(inner) = slot.as_mut() else {
+                return;
+            };
+            let overflow = !inner.modules.push(event);
+            (inner.evflag, overflow)
+        };
+        if overflow {
+            println!("module events overflow");
+        }
+        let _ = evflag.set(EV_WAKE_WORKER);
+    }
+
+    pub fn pop_module(&self) -> Option<ModuleEvent> {
+        self.lock().as_mut().and_then(GdbSessionInner::pop_module)
+    }
+
     pub fn has_excp(&self) -> bool {
         self.lock().as_ref().is_some_and(GdbSessionInner::has_excp)
     }
@@ -473,6 +551,7 @@ impl SessionRef {
                 return;
             };
             inner.exited = true;
+            unsafe { inner.modules.clear() };
             inner.evflag
         };
         let _ = evflag.set(EV_WAKE_WORKER);
@@ -488,6 +567,18 @@ impl SessionRef {
         self.lock()
             .as_ref()
             .is_some_and(|inner| inner.has_watchpoint(addr))
+    }
+
+    pub fn get_original_opcode(&self, addr: u32) -> Option<u32> {
+        self.lock()
+            .as_ref()
+            .and_then(|inner| inner.get_original_opcode(addr))
+    }
+
+    pub fn set_original_opcode(&self, addr: u32, insn: u32) -> bool {
+        self.lock()
+            .as_mut()
+            .is_some_and(|inner| inner.set_original_opcode(addr, insn))
     }
 
     pub fn is_step(&self, tid: SceUID, addr: u32) -> bool {

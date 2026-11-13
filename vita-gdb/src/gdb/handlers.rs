@@ -5,15 +5,14 @@ use gdbstub::target::ext::breakpoints::WatchKind;
 use vitasdk_sys::{
     SCE_EXCP_DABT, SCE_EXCP_PABT, SCE_EXCP_UNDEF_INSTRUCTION,
     SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2, SCE_EXCPMGR_EXCEPTION_NOT_HANDLED, SceExcpHandlingCode,
-    SceExcpmgrExceptionContext, SceProcEventHandler, SceProcEventInvokeParam1,
-    SceProcEventInvokeParam2, SceSysrootProcessHandler, SceUID,
-    ksceKernelChangeThreadSuspendStatus, ksceKernelRegisterProcEventHandler,
-    ksceKernelRegisterSysEventHandler, ksceKernelSysrootSetProcessHandler,
+    SceExcpmgrExceptionContext, SceUID, ksceKernelChangeThreadSuspendStatus,
+    ksceKernelRegisterSysEventHandler,
 };
 
 use crate::cp14::enable_debug;
 use crate::gdb::exception_report;
-use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, find_session_for_pid};
+use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, ModuleEvent, find_session_for_pid};
+use crate::kernel::ffi::{SysrootDbgpHandler, ksceKernelSysrootRegisterDbgpHandler};
 use crate::kernel::utils::{PROCESS_HALT_STATUS, SceError, read_user_process};
 use crate::kernel::{
     ffi::{ksceExcpmgrRegisterHandler, ksceKernelSuspendProcess},
@@ -242,87 +241,196 @@ fn handle_exception(
     SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2
 }
 
-unsafe extern "C" fn handler_dummy_exit(_pid: SceUID, _flags: i32, _time: u64) {}
+const DBGP_ERROR_INVALID_ARGUMENT: i32 = 0x8008_0001u32 as i32;
 
-unsafe extern "C" fn handler_dummy_kill(_pid: SceUID) {}
+unsafe extern "C" fn handle_process_start(_parent_pid: SceUID, _pid: SceUID, _time: u64) -> i32 {
+    0
+}
 
-unsafe extern "C" fn handler_dummy_modid(_pid: SceUID, _modid: SceUID, _time: u64) {}
+unsafe extern "C" fn handle_process_exit(pid: SceUID, _exit_status: i32, _time: u64) -> i32 {
+    if let Some(session) = find_session_for_pid(pid) {
+        session.push_exited();
+    }
+    0
+}
 
-unsafe extern "C" fn handler_dummy_modid_flag(
+unsafe extern "C" fn handle_process_kill(pid: SceUID, _time: u64) -> i32 {
+    if let Some(session) = find_session_for_pid(pid) {
+        session.push_exited();
+    }
+    0
+}
+
+unsafe extern "C" fn handle_process_spontaneous_exit(
     _pid: SceUID,
-    _modid: SceUID,
-    _flags: i32,
+    _status: u32,
     _time: u64,
-) {
-}
-
-unsafe extern "C" fn handler_dummy_process_created(_a1: i32, _a2: i32, _a3: i32) -> i32 {
+) -> i32 {
     0
 }
 
-static PROC_HANDLER: SceSysrootProcessHandler = SceSysrootProcessHandler {
-    size: size_of::<SceSysrootProcessHandler>() as u32,
-    unk_4: Some(handler_dummy_modid_flag),
-    exit: Some(handler_dummy_exit),
-    kill: Some(handler_dummy_kill),
-    unk_10: Some(handler_dummy_modid),
-    unk_14: Some(handler_dummy_modid),
-    unk_18: Some(handler_dummy_modid),
-    on_process_created: Some(handler_dummy_process_created),
-    unk_20: Some(handler_dummy_modid),
-    unk_24: Some(handler_dummy_modid_flag),
-};
-
-unsafe extern "C" fn handle_proc_create(
+unsafe extern "C" fn handle_process_exit_to_spawn(
     _pid: SceUID,
-    _a2: *mut SceProcEventInvokeParam2,
-    _a3: i32,
+    _spawn_pid: SceUID,
+    _time: u64,
 ) -> i32 {
-    //println!("handle_proc_create pid={pid}");
     0
 }
 
-unsafe extern "C" fn handle_proc_kill(
-    pid: SceUID,
-    _a2: *mut SceProcEventInvokeParam1,
-    _a3: i32,
+unsafe extern "C" fn handle_exit_spawn(
+    _pid: SceUID,
+    _spawn_pid: SceUID,
+    _prev_pid: SceUID,
+    _time: u64,
 ) -> i32 {
-    //println!("handle_proc_kill pid={pid}");
+    0
+}
+
+unsafe extern "C" fn handle_process_suspend(_pid: SceUID) -> i32 {
+    0
+}
+
+unsafe extern "C" fn handle_process_resume(_pid: SceUID) -> i32 {
+    0
+}
+
+unsafe extern "C" fn handle_app_abort(_pid: SceUID) -> i32 {
+    0
+}
+
+unsafe extern "C" fn handle_module_start(pid: SceUID, modid: SceUID, _time: u64) -> i32 {
     if let Some(session) = find_session_for_pid(pid) {
-        session.push_exited();
+        session.push_module(ModuleEvent::Start { modid });
     }
     0
 }
 
-unsafe extern "C" fn handle_proc_exit(
-    pid: SceUID,
-    _a2: *mut SceProcEventInvokeParam1,
-    _a3: i32,
-) -> i32 {
-    //println!("handle_proc_exit pid={pid}");
+unsafe extern "C" fn handle_module_stop(pid: SceUID, modid: SceUID, _time: u64) -> i32 {
     if let Some(session) = find_session_for_pid(pid) {
-        session.push_exited();
+        session.push_module(ModuleEvent::Stop { modid });
     }
     0
 }
 
-static PROC_HANDLER2: SceProcEventHandler = SceProcEventHandler {
-    size: size_of::<SceProcEventHandler>() as u32,
-    create: Some(handle_proc_create),
-    exit: Some(handle_proc_exit),
-    kill: Some(handle_proc_kill),
-    stop: None,
-    start: None,
-    switch_process: None,
+unsafe extern "C" fn handle_is_debug_target(pid: SceUID) -> i32 {
+    i32::from(find_session_for_pid(pid).is_some())
+}
+
+unsafe extern "C" fn handle_is_ps_button_captured() -> i32 {
+    0
+}
+
+unsafe extern "C" fn handle_get_original_opcode(
+    pid: SceUID,
+    address: *mut c_void,
+    opcode: *mut u32,
+) -> i32 {
+    if opcode.is_null() {
+        return DBGP_ERROR_INVALID_ARGUMENT;
+    }
+    let Some(session) = find_session_for_pid(pid) else {
+        return DBGP_ERROR_INVALID_ARGUMENT;
+    };
+    let Some(value) = session.get_original_opcode(address as u32) else {
+        return DBGP_ERROR_INVALID_ARGUMENT;
+    };
+    unsafe { *opcode = value };
+    0
+}
+
+unsafe extern "C" fn handle_code_modified(pid: SceUID, address: u32, instruction: u32) -> i32 {
+    let Some(session) = find_session_for_pid(pid) else {
+        return DBGP_ERROR_INVALID_ARGUMENT;
+    };
+    if session.set_original_opcode(address, instruction) {
+        0
+    } else {
+        DBGP_ERROR_INVALID_ARGUMENT
+    }
+}
+
+unsafe extern "C" fn handle_get_prx_debug_flag(pid: SceUID, flag: *mut u32) -> i32 {
+    if flag.is_null() || find_session_for_pid(pid).is_none() {
+        return DBGP_ERROR_INVALID_ARGUMENT;
+    }
+    unsafe { *flag = 0 };
+    0
+}
+
+unsafe extern "C" fn handle_suspend_process_and_wait_resume(
+    pid: SceUID,
+    _modid: SceUID,
+    _stop_reason: u32,
+    _time: u64,
+) -> i32 {
+    if find_session_for_pid(pid).is_some() {
+        0
+    } else {
+        DBGP_ERROR_INVALID_ARGUMENT
+    }
+}
+
+unsafe extern "C" fn handle_is_process_attached(pid: SceUID) -> i32 {
+    i32::from(find_session_for_pid(pid).is_some())
+}
+
+unsafe extern "C" fn handle_enable_watchpoint(_ops: *const SysrootDbgpHandler) -> i32 {
+    0
+}
+
+unsafe extern "C" fn handle_disable_watchpoint(_ops: *const SysrootDbgpHandler) -> i32 {
+    0
+}
+
+unsafe extern "C" fn handle_update_ulobjmgr_for_dbgp(
+    _dbgp: *mut c_void,
+    _process: *mut c_void,
+    set: u32,
+    _clear: u32,
+    flag: *mut u32,
+) -> i32 {
+    if !flag.is_null() {
+        unsafe { *flag = set };
+    }
+    0
+}
+
+unsafe extern "C" fn handle_update_ulobjmgr_for_fiber(_pid: SceUID, flag: *mut u32) -> i32 {
+    if flag.is_null() {
+        return DBGP_ERROR_INVALID_ARGUMENT;
+    }
+    unsafe { *flag = 0 };
+    0
+}
+
+static DBGP_HANDLER: SysrootDbgpHandler = SysrootDbgpHandler {
+    size: size_of::<SysrootDbgpHandler>() as u32,
+    processStart: Some(handle_process_start),
+    processExit: Some(handle_process_exit),
+    processKill: Some(handle_process_kill),
+    processSpontaneousExit: Some(handle_process_spontaneous_exit),
+    processExitToSpawn: Some(handle_process_exit_to_spawn),
+    exitSpawn: Some(handle_exit_spawn),
+    processSuspend: Some(handle_process_suspend),
+    processResume: Some(handle_process_resume),
+    appAbort: Some(handle_app_abort),
+    moduleStart: Some(handle_module_start),
+    moduleStop: Some(handle_module_stop),
+    isDebugTarget: Some(handle_is_debug_target),
+    isPsButtonCaptured: Some(handle_is_ps_button_captured),
+    swBkptGetOriginalOpcode: Some(handle_get_original_opcode),
+    codeModified: Some(handle_code_modified),
+    getPrxDebugFlag: Some(handle_get_prx_debug_flag),
+    suspendProcessAndWaitResume: Some(handle_suspend_process_and_wait_resume),
+    isProcessAttached: Some(handle_is_process_attached),
+    enableWatchpoint: Some(handle_enable_watchpoint),
+    disableWatchpoint: Some(handle_disable_watchpoint),
+    updateUlobjmgrFlagForDbgp: Some(handle_update_ulobjmgr_for_dbgp),
+    updateUlobjmgrFlagForLibfiber: Some(handle_update_ulobjmgr_for_fiber),
 };
 
 pub fn register_process_handlers() -> Result<(), SceError> {
-    sce_call!(ksceKernelSysrootSetProcessHandler(&PROC_HANDLER))?;
-    sce_call!(ksceKernelRegisterProcEventHandler(
-        c"gdb_proc_event".as_ptr(),
-        &PROC_HANDLER2,
-        0
-    ))?;
+    sce_call!(ksceKernelSysrootRegisterDbgpHandler(&DBGP_HANDLER))?;
     Ok(())
 }
 

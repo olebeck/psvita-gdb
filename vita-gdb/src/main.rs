@@ -67,6 +67,16 @@ fn do_hooks() {
     ) {
         println!("hook_import: {err}");
     }
+
+    if let Err(err) = hook_import!(
+        0x10005,
+        c"SceProcessmgr",
+        0xC9E26388,
+        0xA98FC2FD,
+        ksceKernelCheckDipsw_ProcessMgr_hook
+    ) {
+        println!("hook_import: {err}");
+    }
 }
 
 // make SceAppMgr launch app read args
@@ -82,4 +92,12 @@ hook!(fn SceQafMgrForDriver_382C71E8_hook() -> i32 as hook_continue {
 // allow backtrace kernel
 hook!(fn SceSblACMgrForKernel_BBA13D9C_hook() -> i32 as hook_continue {
     return 1;
+});
+
+// make ProcessMgr call debug event handlers
+hook!(fn ksceKernelCheckDipsw_ProcessMgr_hook(bit: u32) -> i32 as hook_continue {
+    if bit == 0xc2 {
+        return 1;
+    }
+    hook_continue(bit)
 });
