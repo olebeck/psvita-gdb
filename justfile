@@ -20,6 +20,9 @@ bloat:
 clippy:
     cargo +nightly clippy -Zbuild-std=core
 
+fmt:
+    cargo +nightly fmt
+
 clean:
     cargo clean
 

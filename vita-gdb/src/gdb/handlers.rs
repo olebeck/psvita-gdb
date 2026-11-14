@@ -1,16 +1,14 @@
 use core::ffi::c_void;
-use core::ptr::null_mut;
 
 use gdbstub::target::ext::breakpoints::WatchKind;
 use vitasdk_sys::{
     SCE_EXCP_DABT, SCE_EXCP_PABT, SCE_EXCP_UNDEF_INSTRUCTION, SCE_EXCPMGR_EXCEPTION_HANDLING_CODE_2,
-    SCE_EXCPMGR_EXCEPTION_NOT_HANDLED, SceExcpHandlingCode, SceExcpmgrExceptionContext, SceUID,
-    ksceKernelChangeThreadSuspendStatus, ksceKernelRegisterSysEventHandler,
+    SCE_EXCPMGR_EXCEPTION_NOT_HANDLED, SceExcpHandlingCode, SceExcpmgrExceptionContext, SceSysrootProcessHandler,
+    SceUID, ksceKernelChangeThreadSuspendStatus, ksceKernelSysrootSetProcessHandler,
 };
 
-use crate::cp14::enable_debug;
 use crate::gdb::exception_report;
-use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, ModuleEvent, find_session_for_pid};
+use crate::gdb::sessions::{ExceptionEvent, ExceptionKind, find_session_for_pid};
 use crate::kernel::ffi::{SysrootDbgpHandler, ksceKernelSysrootRegisterDbgpHandler};
 use crate::kernel::utils::{PROCESS_HALT_STATUS, SceError, read_user_process};
 use crate::kernel::{
@@ -226,19 +224,9 @@ unsafe extern "C" fn handle_process_resume(_pid: SceUID) -> i32 { 0 }
 
 unsafe extern "C" fn handle_app_abort(_pid: SceUID) -> i32 { 0 }
 
-unsafe extern "C" fn handle_module_start(pid: SceUID, modid: SceUID, _time: u64) -> i32 {
-    if let Some(session) = find_session_for_pid(pid) {
-        session.push_module(ModuleEvent::Start { modid });
-    }
-    0
-}
+unsafe extern "C" fn handle_module_start(_pid: SceUID, _modid: SceUID, _time: u64) -> i32 { 0 }
 
-unsafe extern "C" fn handle_module_stop(pid: SceUID, modid: SceUID, _time: u64) -> i32 {
-    if let Some(session) = find_session_for_pid(pid) {
-        session.push_module(ModuleEvent::Stop { modid });
-    }
-    0
-}
+unsafe extern "C" fn handle_module_stop(_pid: SceUID, _modid: SceUID, _time: u64) -> i32 { 0 }
 
 unsafe extern "C" fn handle_is_debug_target(pid: SceUID) -> i32 { i32::from(find_session_for_pid(pid).is_some()) }
 
@@ -343,25 +331,31 @@ static DBGP_HANDLER: SysrootDbgpHandler = SysrootDbgpHandler {
     updateUlobjmgrFlagForLibfiber: Some(handle_update_ulobjmgr_for_fiber),
 };
 
+unsafe extern "C" fn handle_sysroot_process_modid(_pid: SceUID, _modid: SceUID, _time: u64) {}
+
+unsafe extern "C" fn handle_sysroot_process_modid_flags(_pid: SceUID, _modid: SceUID, _flags: i32, _time: u64) {}
+
+unsafe extern "C" fn handle_sysroot_process_exit(_pid: SceUID, _flags: i32, _time: u64) {}
+
+unsafe extern "C" fn handle_sysroot_process_kill(_pid: SceUID) {}
+
+unsafe extern "C" fn handle_sysroot_process_created(_a1: i32, _a2: i32, _a3: i32) -> i32 { 0 }
+
+static PROCESS_HANDLER: SceSysrootProcessHandler = SceSysrootProcessHandler {
+    size: size_of::<SceSysrootProcessHandler>() as u32,
+    unk_4: Some(handle_sysroot_process_modid_flags),
+    exit: Some(handle_sysroot_process_exit),
+    kill: Some(handle_sysroot_process_kill),
+    unk_10: Some(handle_sysroot_process_modid),
+    unk_14: Some(handle_sysroot_process_modid),
+    unk_18: Some(handle_sysroot_process_modid),
+    on_process_created: Some(handle_sysroot_process_created),
+    unk_20: Some(handle_sysroot_process_modid),
+    unk_24: Some(handle_sysroot_process_modid_flags),
+};
+
 pub fn register_process_handlers() -> Result<(), SceError> {
     sce_call!(ksceKernelSysrootRegisterDbgpHandler(&DBGP_HANDLER))?;
-    Ok(())
-}
-
-unsafe extern "C" fn handle_sysevent(resume: i32, eventid: i32, _args: *mut c_void, _opt: *mut c_void) -> i32 {
-    if resume != 0 && eventid == 0x100000 {
-        if let Err(err) = enable_debug() {
-            println!("enable_debug: {err}");
-        }
-    }
-    0
-}
-
-pub fn register_sysevent_handler() -> Result<(), SceError> {
-    sce_call!(ksceKernelRegisterSysEventHandler(
-        c"enable_debug".as_ptr(),
-        Some(handle_sysevent),
-        null_mut()
-    ))?;
+    sce_call!(ksceKernelSysrootSetProcessHandler(&PROCESS_HANDLER))?;
     Ok(())
 }

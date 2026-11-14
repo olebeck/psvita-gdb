@@ -34,7 +34,7 @@ impl Arch for Armv7 {
         <reg name="sp" bitsize="32" type="data_ptr"/>
         <reg name="lr" bitsize="32" type="uint32"/>
         <reg name="pc" bitsize="32" type="code_ptr"/>
-        <reg name="cpsr" bitsize="32" regnum="25"/>
+        <reg name="cpsr" bitsize="32" type="uint32"/>
     </feature>
     <feature name="org.gnu.gdb.arm.vfp">
         <reg name="d0" bitsize="64" type="ieee_double"/>

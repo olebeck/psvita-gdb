@@ -3,12 +3,14 @@ use vitasdk_sys::ksceKernelCheckDipsw;
 use crate::{
     kernel::{ffi::spl_is_loaded, utils::SceError},
     mep::spl_exec,
-    println,
+    println, sce_call,
 };
 
 use core::{ffi::c_void, ptr::null_mut};
 
-use vitasdk_sys::{SceObjectBase, ksceGUIDReferObject, ksceGUIDReleaseObject, ksceKernelSetDipsw};
+use vitasdk_sys::{
+    SceObjectBase, ksceGUIDReferObject, ksceGUIDReleaseObject, ksceKernelRegisterSysEventHandler, ksceKernelSetDipsw,
+};
 
 const CP14_NMP: [u8; 60] = [
     0x21, 0xc3, 0x10, 0xe3, 0x34, 0xc3, 0x00, 0x20, 0x21, 0xc1, 0xf0, 0x00, 0x3e, 0x02, 0x00, 0x50, 0x10, 0x12, 0x3a,
@@ -49,3 +51,21 @@ fn hacky_fix_kernel() {
 }
 
 pub fn is_debug_enabled() -> bool { unsafe { ksceKernelCheckDipsw(0xe4) == 1 } }
+
+unsafe extern "C" fn handle_sysevent(resume: i32, eventid: i32, _args: *mut c_void, _opt: *mut c_void) -> i32 {
+    if resume != 0 && eventid == 0x100000 {
+        //if let Err(err) = enable_debug() {
+        //    println!("enable_debug: {err}");
+        //}
+    }
+    0
+}
+
+pub fn register_sysevent_handler() -> Result<(), SceError> {
+    sce_call!(ksceKernelRegisterSysEventHandler(
+        c"enable_debug".as_ptr(),
+        Some(handle_sysevent),
+        null_mut()
+    ))?;
+    Ok(())
+}

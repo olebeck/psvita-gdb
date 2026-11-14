@@ -44,12 +44,6 @@ pub enum ExceptionEvent {
     Exception { tid: SceUID, kind: ExceptionKind },
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum ModuleEvent {
-    Start { modid: SceUID },
-    Stop { modid: SceUID },
-}
-
 #[derive(Clone)]
 pub struct HwWatchpoint {
     addr: u32,
@@ -118,7 +112,6 @@ pub struct GdbSessionInner {
     step_result: Option<SceUID>,
     exited: bool,
     exceptions: MpscRing<ExceptionEvent, 8>,
-    modules: MpscRing<ModuleEvent, 8>,
 }
 
 impl GdbSessionInner {
@@ -134,7 +127,6 @@ impl GdbSessionInner {
             step_result: None,
             exited: false,
             exceptions: MpscRing::new(),
-            modules: MpscRing::new(),
         }
     }
 
@@ -148,15 +140,12 @@ impl GdbSessionInner {
         self.exited = false;
         unsafe {
             self.exceptions.clear();
-            self.modules.clear();
         }
     }
 
     pub fn pid(&self) -> SceUID { self.pid }
 
     pub fn pop_excp(&mut self) -> Option<ExceptionEvent> { unsafe { self.exceptions.pop() } }
-
-    pub fn pop_module(&mut self) -> Option<ModuleEvent> { unsafe { self.modules.pop() } }
 
     pub fn has_excp(&self) -> bool { !self.exceptions.is_empty() }
 
@@ -452,23 +441,6 @@ impl SessionRef {
 
     pub fn pop_excp(&self) -> Option<ExceptionEvent> { self.lock().as_mut().and_then(GdbSessionInner::pop_excp) }
 
-    pub fn push_module(&self, event: ModuleEvent) {
-        let (evflag, overflow) = {
-            let mut slot = self.lock();
-            let Some(inner) = slot.as_mut() else {
-                return;
-            };
-            let overflow = !inner.modules.push(event);
-            (inner.evflag, overflow)
-        };
-        if overflow {
-            println!("module events overflow");
-        }
-        let _ = evflag.set(EV_WAKE_WORKER);
-    }
-
-    pub fn pop_module(&self) -> Option<ModuleEvent> { self.lock().as_mut().and_then(GdbSessionInner::pop_module) }
-
     pub fn has_excp(&self) -> bool { self.lock().as_ref().is_some_and(GdbSessionInner::has_excp) }
 
     pub fn push_exited(&self) {
@@ -478,7 +450,6 @@ impl SessionRef {
                 return;
             };
             inner.exited = true;
-            unsafe { inner.modules.clear() };
             inner.evflag
         };
         let _ = evflag.set(EV_WAKE_WORKER);

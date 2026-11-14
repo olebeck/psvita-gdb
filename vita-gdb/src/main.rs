@@ -23,14 +23,14 @@ fn main() {
     if let Err(err) = gdb::handlers::register_process_handlers() {
         println!("register_process_handlers {err}");
     }
-    if let Err(err) = gdb::handlers::register_sysevent_handler() {
-        println!("register_sysevent_handler {err}");
-    }
     if let Err(err) = net_fixup::fixup_netrecv_bug() {
         println!("fixup_netrecv_bug: {err}");
     }
     if let Err(err) = cp14::enable_debug() {
         println!("enable_debug: {err}");
+    }
+    if let Err(err) = cp14::register_sysevent_handler() {
+        println!("register_sysevent_handler {err}");
     }
     if let Err(err) = gdb::main::start_gdb() {
         println!("start_gdb: {err}");
