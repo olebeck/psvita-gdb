@@ -22,6 +22,7 @@ const CP14_NMP: [u8; 60] = [
 const SCE_DIPSW_HW_DEBUG: u32 = 0xe4;
 
 pub fn enable_debug() -> Result<(), SceError> {
+    return Ok(());
     let val = unsafe { ksceKernelCheckDipsw(SCE_DIPSW_HW_DEBUG) };
     if val == 1 {
         return Ok(());
@@ -54,9 +55,9 @@ pub fn is_debug_enabled() -> bool { unsafe { ksceKernelCheckDipsw(0xe4) == 1 } }
 
 unsafe extern "C" fn handle_sysevent(resume: i32, eventid: i32, _args: *mut c_void, _opt: *mut c_void) -> i32 {
     if resume != 0 && eventid == 0x100000 {
-        //if let Err(err) = enable_debug() {
-        //    println!("enable_debug: {err}");
-        //}
+        if let Err(err) = enable_debug() {
+            println!("enable_debug: {err}");
+        }
     }
     0
 }

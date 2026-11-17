@@ -39,71 +39,57 @@ fn is_thumb(ctx: &SceExcpmgrExceptionContext) -> bool { (ctx.SPSR >> 5) & 1 != 0
 
 #[macro_export]
 macro_rules! excp_handler {
-    ($name:ident, $handler:ident) => {
-        unsafe extern "C" {
-            fn $name(
-                context: *mut ::vitasdk_sys::SceExcpmgrExceptionContext,
-                code: ::vitasdk_sys::SceExcpHandlingCode,
-            ) -> ::vitasdk_sys::SceExcpHandlingCode;
+    ($name:ident, |$context:ident, $code:ident| $body:block) => {
+        ::pastey::paste! {
+            #[inline(always)]
+            extern "C" fn [<__ $name _body>](
+                $context: *mut ::vitasdk_sys::SceExcpmgrExceptionContext,
+                $code: ::vitasdk_sys::SceExcpHandlingCode,
+            ) -> ::vitasdk_sys::SceExcpHandlingCode $body
+
+            #[unsafe(naked)]
+            unsafe extern "C" fn $name(
+                _context: *mut ::vitasdk_sys::SceExcpmgrExceptionContext,
+                _code: ::vitasdk_sys::SceExcpHandlingCode,
+            ) -> ::vitasdk_sys::SceExcpHandlingCode {
+                ::core::arch::naked_asm!(
+                    ".arm",
+                    ".word 0x0", // next handler pointer
+                    ".word 0x0", // prev handler pointer
+                    "mov r4, r0",
+                    "cpsie i",
+                    "blx {body}",
+                    "cpsid i",
+                    "mov r1, r0",
+                    "mov r0, r4",
+                    "ldr r2, ={this}",
+                    "ldr r2, [r2]",
+                    "add r2, r2, #8",
+                    "mov pc, r2",
+                    body = sym [<__ $name _body>],
+                    this = sym $name,
+                )
+            }
         }
-        ::core::arch::global_asm!(
-            ".arm",
-            concat!(".global ", stringify!($name)),
-            concat!(stringify!($name), ":"),
-            ".word 0x0",                             // next handler pointer
-            ".word 0x0",                             // prev handler pointer
-            "mov r4, r0",                            // preserve context
-            "cpsie i",                               // enable irq
-            concat!("blx ", stringify!($handler)),   // jump to handler
-            "cpsid i",                               // disable irq
-            "mov r1, r0",                            // arg0 = code
-            "mov r0, r4",                            // arg1 = context
-            concat!("ldr r2, =", stringify!($name)), // jump to next handler in the chain
-            "ldr r2, [r2]",
-            "add r2, r2, #8",
-            "mov pc, r2"
-        );
     };
 }
 
-excp_handler!(_gdb_pabt_handler, gdb_pabt_handler);
-excp_handler!(_gdb_dabt_handler, gdb_dabt_handler);
-excp_handler!(_gdb_undef_handler, gdb_undef_handler);
+excp_handler!(gdb_pabt_handler, |context, code| { handle_prefetch_abort(unsafe { &*context }, code) });
+
+excp_handler!(gdb_dabt_handler, |context, code| { handle_data_abort(unsafe { &*context }, code) });
+
+excp_handler!(gdb_undef_handler, |context, code| { handle_undef(unsafe { &*context }, code) });
 
 pub fn register_exception_handlers() {
-    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_PABT, 5, _gdb_pabt_handler)) {
+    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_PABT, 5, gdb_pabt_handler)) {
         println!("{err} excp=SCE_EXCP_PABT");
     }
-    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_DABT, 5, _gdb_dabt_handler)) {
+    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_DABT, 5, gdb_dabt_handler)) {
         println!("{err} excp=SCE_EXCP_DABT");
     }
-    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_UNDEF_INSTRUCTION, 5, _gdb_undef_handler)) {
+    if let Err(err) = sce_call!(ksceExcpmgrRegisterHandler(SCE_EXCP_UNDEF_INSTRUCTION, 5, gdb_undef_handler)) {
         println!("{err} excp=SCE_EXCP_UNDEF_INSTRUCTION");
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn gdb_pabt_handler(
-    context: *const SceExcpmgrExceptionContext,
-    code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
-    handle_prefetch_abort(unsafe { &*context }, code)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn gdb_dabt_handler(
-    context: *const SceExcpmgrExceptionContext,
-    code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
-    handle_data_abort(unsafe { &*context }, code)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn gdb_undef_handler(
-    context: *const SceExcpmgrExceptionContext,
-    code: SceExcpHandlingCode,
-) -> SceExcpHandlingCode {
-    handle_undef(unsafe { &*context }, code)
 }
 
 fn handle_prefetch_abort(context: &SceExcpmgrExceptionContext, code: SceExcpHandlingCode) -> SceExcpHandlingCode {
